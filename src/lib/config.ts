@@ -2,19 +2,18 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import type { CiderConfig } from "./types";
+import type { CliConfig } from "./types";
 import { ExternalServiceError, ValidationError } from "./errors";
 import { getMediaUserTokenSecret, setMediaUserTokenSecret, clearMediaUserTokenSecret } from "./secrets";
 
-const CONFIG_DIR = join(homedir(), ".config", "cider-music");
+const CONFIG_DIR = join(homedir(), ".config", "setlist");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
-const LEGACY_CONFIG_FILE = join(homedir(), ".config", "aria", "config.json");
 
-const DEFAULT_CONFIG: CiderConfig = {
+const DEFAULT_CONFIG: CliConfig = {
   defaultEngine: "auto",
   storefront: "auto",
 };
-const VALID_ENGINES = new Set<CiderConfig["defaultEngine"]>(["native", "api", "auto"]);
+const VALID_ENGINES = new Set<CliConfig["defaultEngine"]>(["native", "api", "auto"]);
 
 export async function getConfigDir(): Promise<string> {
   if (!existsSync(CONFIG_DIR)) {
@@ -27,7 +26,7 @@ function isMissingFile(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-export function parseConfig(raw: string, path: string): CiderConfig {
+export function parseConfig(raw: string, path: string): CliConfig {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -39,7 +38,7 @@ export function parseConfig(raw: string, path: string): CiderConfig {
     throw new ValidationError(`Config file must contain a JSON object: ${path}`);
   }
 
-  const config = { ...DEFAULT_CONFIG, ...parsed } as CiderConfig;
+  const config = { ...DEFAULT_CONFIG, ...parsed } as CliConfig;
   if (!VALID_ENGINES.has(config.defaultEngine)) {
     throw new ValidationError(`Invalid default engine in config: ${config.defaultEngine}`);
   }
@@ -50,7 +49,7 @@ export function parseConfig(raw: string, path: string): CiderConfig {
   return config;
 }
 
-async function readConfig(path: string): Promise<CiderConfig | undefined> {
+async function readConfig(path: string): Promise<CliConfig | undefined> {
   try {
     return parseConfig(await readFile(path, "utf-8"), path);
   } catch (err) {
@@ -60,11 +59,11 @@ async function readConfig(path: string): Promise<CiderConfig | undefined> {
   }
 }
 
-export async function loadConfig(): Promise<CiderConfig> {
-  return (await readConfig(CONFIG_FILE)) ?? (await readConfig(LEGACY_CONFIG_FILE)) ?? { ...DEFAULT_CONFIG };
+export async function loadConfig(): Promise<CliConfig> {
+  return (await readConfig(CONFIG_FILE)) ?? { ...DEFAULT_CONFIG };
 }
 
-export async function saveConfig(config: CiderConfig): Promise<void> {
+export async function saveConfig(config: CliConfig): Promise<void> {
   await getConfigDir();
   try {
     await writeFile(CONFIG_FILE, `${JSON.stringify(config, null, 2)}\n`);
@@ -85,7 +84,7 @@ export async function clearMediaUserToken(): Promise<void> {
   await clearMediaUserTokenSecret();
 }
 
-export async function setDefaultEngine(defaultEngine: CiderConfig["defaultEngine"]): Promise<void> {
+export async function setDefaultEngine(defaultEngine: CliConfig["defaultEngine"]): Promise<void> {
   const config = await loadConfig();
   config.defaultEngine = defaultEngine;
   await saveConfig(config);

@@ -4,21 +4,21 @@ import {
   ValidationError,
   ExternalServiceError,
   UnsupportedOperationError,
-  isCiderError,
+  isMusicError,
 } from "../src/lib/errors";
 
 describe("error hierarchy", () => {
-  test("all error types are CiderError instances", () => {
-    expect(isCiderError(new ValidationError("bad input"))).toBe(true);
-    expect(isCiderError(new AuthError("no token"))).toBe(true);
-    expect(isCiderError(new ExternalServiceError("JXA failed"))).toBe(true);
-    expect(isCiderError(new UnsupportedOperationError("not supported"))).toBe(true);
+  test("all error types are MusicError instances", () => {
+    expect(isMusicError(new ValidationError("bad input"))).toBe(true);
+    expect(isMusicError(new AuthError("no token"))).toBe(true);
+    expect(isMusicError(new ExternalServiceError("JXA failed"))).toBe(true);
+    expect(isMusicError(new UnsupportedOperationError("not supported"))).toBe(true);
   });
 
-  test("plain errors are not CiderError", () => {
-    expect(isCiderError(new Error("plain"))).toBe(false);
-    expect(isCiderError("string")).toBe(false);
-    expect(isCiderError(null)).toBe(false);
+  test("plain errors are not MusicError", () => {
+    expect(isMusicError(new Error("plain"))).toBe(false);
+    expect(isMusicError("string")).toBe(false);
+    expect(isMusicError(null)).toBe(false);
   });
 
   test("error codes are correct", () => {
@@ -29,8 +29,8 @@ describe("error hierarchy", () => {
   });
 
   test("hints are preserved", () => {
-    const err = new AuthError("Token expired", "Run cider-music auth import");
-    expect(err.hint).toBe("Run cider-music auth import");
+    const err = new AuthError("Token expired", "Run setlist auth import");
+    expect(err.hint).toBe("Run setlist auth import");
     expect(err.message).toBe("Token expired");
   });
 

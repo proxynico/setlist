@@ -1,12 +1,12 @@
-# Cider Music
+# Setlist
 
 Apple Music CLI for power users and AI agents.
 
-Repo: `https://github.com/proxynico/cider-music`
+Repo: `https://github.com/proxynico/setlist`
 
 ## What This App Is
 
-Cider Music is a Bun/TypeScript command-line tool for Apple Music. It has two
+Setlist is a Bun/TypeScript command-line tool for Apple Music. It has two
 jobs:
 
 1. Control and inspect Music.app locally on macOS.
@@ -59,7 +59,7 @@ src/
   lib/
     types.ts            Domain types and MusicEngine interface
     entities.ts         Source-qualified entity IDs and validation
-    errors.ts           CiderError hierarchy
+    errors.ts           MusicError hierarchy
     input.ts            Input parsing
     output.ts           Human, JSON, and plain output helpers
     library-audit.ts    Read-only library gardening analysis
@@ -92,7 +92,7 @@ Config:      config status | config engine [native|api|auto] | config storefront
 
 - Preserve human, `--json`, and `--plain` output for every command.
 - Use output helpers from `src/lib/output.ts`; do not raw-print errors.
-- Use `CiderError` subclasses for expected failures.
+- Use `MusicError` subclasses for expected failures.
 - Keep IDs source-qualified:
   - `native:persistent:*`
   - `api:library:*`

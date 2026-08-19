@@ -10,7 +10,7 @@ import type {
   SearchResults,
   SearchType,
   Device,
-  CiderConfig,
+  CliConfig,
 } from "../lib/types";
 import { getMediaUserToken, loadConfig } from "../lib/config";
 import { buildIdentity, parseEntityRef, validateRawId } from "../lib/entities";
@@ -123,7 +123,7 @@ async function apiRequest<T>(path: string, params?: Record<string, string>): Pro
   if (!mediaUserToken) {
     throw new AuthError(
       "No Apple Music media-user-token is configured.",
-      "Run `cider-music auth import --browser safari` or `cider-music auth token <token>`.",
+      "Run `setlist auth import --browser safari` or `setlist auth token <token>`.",
     );
   }
 
@@ -149,7 +149,7 @@ async function apiRequest<T>(path: string, params?: Record<string, string>): Pro
     if (res.status === 401 || res.status === 403) {
       throw new AuthError(
         "Apple Music authentication failed. The media-user-token may be expired.",
-        "Re-import it with `cider-music auth import --browser safari`.",
+        "Re-import it with `setlist auth import --browser safari`.",
       );
     }
     throw new ExternalServiceError(`Apple Music API error: ${res.status} ${res.statusText}`);
@@ -183,7 +183,7 @@ interface AMResponse {
 }
 
 type ApiRequest = <T>(path: string, params?: Record<string, string>) => Promise<T>;
-type ConfigLoader = () => Promise<CiderConfig>;
+type ConfigLoader = () => Promise<CliConfig>;
 
 interface ApiEngineDeps {
   request?: ApiRequest;
@@ -231,7 +231,7 @@ function resolveApiLibraryId(id: string, label: string): string {
     if (ref.source !== "api" || ref.kind !== "library") {
       throw new UnsupportedOperationError(
         `${label} ${id} is not an Apple Music library ID`,
-        `Use \`cider-music --engine api ... --json\` and pass the ${label.toLowerCase()}'s \`libraryId\` field.`,
+        `Use \`setlist --engine api ... --json\` and pass the ${label.toLowerCase()}'s \`libraryId\` field.`,
       );
     }
     return validateRawId(ref.value, label);
@@ -333,7 +333,7 @@ export class ApiEngine implements MusicEngine {
     return (this.deps.request ?? apiRequest)<T>(path, params);
   }
 
-  private loadRuntimeConfig(): Promise<CiderConfig> {
+  private loadRuntimeConfig(): Promise<CliConfig> {
     return (this.deps.configLoader ?? loadConfig)();
   }
 
@@ -384,35 +384,35 @@ export class ApiEngine implements MusicEngine {
   async play(_query?: string): Promise<void> {
     throw new UnsupportedOperationError(
       "Playback control requires the native engine.",
-      "Use `cider-music --engine native play`.",
+      "Use `setlist --engine native play`.",
     );
   }
 
   async pause(): Promise<void> {
     throw new UnsupportedOperationError(
       "Playback control requires the native engine.",
-      "Use `cider-music --engine native pause`.",
+      "Use `setlist --engine native pause`.",
     );
   }
 
   async resume(): Promise<void> {
     throw new UnsupportedOperationError(
       "Playback control requires the native engine.",
-      "Use `cider-music --engine native resume`.",
+      "Use `setlist --engine native resume`.",
     );
   }
 
   async next(): Promise<void> {
     throw new UnsupportedOperationError(
       "Playback control requires the native engine.",
-      "Use `cider-music --engine native next`.",
+      "Use `setlist --engine native next`.",
     );
   }
 
   async previous(): Promise<void> {
     throw new UnsupportedOperationError(
       "Playback control requires the native engine.",
-      "Use `cider-music --engine native prev`.",
+      "Use `setlist --engine native prev`.",
     );
   }
 

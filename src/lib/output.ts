@@ -10,7 +10,7 @@ import type {
   Device,
   SearchResults,
 } from "./types";
-import { isCiderError, ValidationError } from "./errors";
+import { isMusicError, ValidationError } from "./errors";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -415,7 +415,7 @@ function formatCause(cause: unknown): string {
 }
 
 export function outputErrorDetails(error: unknown) {
-  if (isCiderError(error)) {
+  if (isMusicError(error)) {
     outputError(error.message);
     if (error.hint) {
       console.error(c(DIM, error.hint));

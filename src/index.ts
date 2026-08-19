@@ -14,13 +14,13 @@ import { registerConfigCommands } from "./commands/config";
 import { loadConfig } from "./lib/config";
 import { ValidationError } from "./lib/errors";
 import { setColorEnabled, setVerboseEnabled, outputErrorDetails } from "./lib/output";
-import type { CiderConfig, MusicEngine } from "./lib/types";
+import type { CliConfig, MusicEngine } from "./lib/types";
 
 const VERSION = "0.1.0";
-let runtimeConfig: CiderConfig = { defaultEngine: "auto", storefront: "auto" };
+let runtimeConfig: CliConfig = { defaultEngine: "auto", storefront: "auto" };
 
 const program = new Command()
-  .name("cider-music")
+  .name("setlist")
   .description("Apple Music CLI for power users and AI agents")
   .version(VERSION)
   .option("--json", "Output as JSON")

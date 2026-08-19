@@ -77,7 +77,7 @@ async function importSafariCookie(): Promise<string> {
       "You may need to grant Full Disk Access to Terminal in System Settings > Privacy.",
       "",
       "Alternatively, paste the token manually:",
-      "  cider-music auth token <paste-token-here>",
+      "  setlist auth token <paste-token-here>",
     ].join("\n"),
   );
 }
@@ -166,7 +166,7 @@ else:
       "You may need the 'cryptography' Python package: pip3 install cryptography",
       "",
       "Alternatively, paste the token manually:",
-      "  cider-music auth token <paste-token-here>",
+      "  setlist auth token <paste-token-here>",
     ].join("\n"),
   );
 }
@@ -215,7 +215,7 @@ async function importFirefoxCookie(): Promise<string> {
       "Make sure you're logged into music.apple.com in Firefox.",
       "",
       "Alternatively, paste the token manually:",
-      "  cider-music auth token <paste-token-here>",
+      "  setlist auth token <paste-token-here>",
     ].join("\n"),
   );
 }

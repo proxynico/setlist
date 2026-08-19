@@ -1,6 +1,5 @@
 node_modules/
 dist/
-aria
-cider-music
+setlist
 *.bun
 .DS_Store

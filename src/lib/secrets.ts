@@ -1,8 +1,7 @@
 import { $ } from "bun";
 import { AuthError } from "./errors";
 
-const SERVICE = "cider-music";
-const LEGACY_SERVICE = "aria-music";
+const SERVICE = "setlist";
 const ACCOUNT = "media-user-token";
 
 async function readToken(service: string): Promise<string | undefined> {
@@ -16,7 +15,7 @@ async function readToken(service: string): Promise<string | undefined> {
 }
 
 export async function getMediaUserTokenSecret(): Promise<string | undefined> {
-  return (await readToken(SERVICE)) ?? (await readToken(LEGACY_SERVICE));
+  return readToken(SERVICE);
 }
 
 export async function setMediaUserTokenSecret(token: string): Promise<void> {
@@ -26,12 +25,11 @@ export async function setMediaUserTokenSecret(token: string): Promise<void> {
   if (addResult.exitCode !== 0) {
     throw new AuthError(
       "Failed to save the Apple Music token to Keychain",
-      "Grant Terminal access to Keychain if prompted, or re-run `cider-music auth token <token>`.",
+      "Grant Terminal access to Keychain if prompted, or re-run `setlist auth token <token>`.",
     );
   }
 }
 
 export async function clearMediaUserTokenSecret(): Promise<void> {
   await $`security delete-generic-password -s ${SERVICE} -a ${ACCOUNT}`.quiet().nothrow();
-  await $`security delete-generic-password -s ${LEGACY_SERVICE} -a ${ACCOUNT}`.quiet().nothrow();
 }

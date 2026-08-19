@@ -1,8 +1,8 @@
-# Cider Music
+# Setlist
 
 Apple Music from the command line.
 
-Cider Music controls Music.app on macOS, searches Apple Music, reads your
+Setlist controls Music.app on macOS, searches Apple Music, reads your
 library, and helps audit and improve your playlists. It is built for both
 humans and agents: every command has readable terminal output plus `--json` and
 `--plain` modes for automation.
@@ -27,8 +27,8 @@ modify playlists.
 ## Install
 
 ```bash
-git clone https://github.com/proxynico/cider-music.git
-cd cider-music
+git clone https://github.com/proxynico/setlist.git
+cd setlist
 bun install
 bun link
 ```
@@ -36,7 +36,7 @@ bun link
 After linking:
 
 ```bash
-cider-music --version
+setlist --version
 ```
 
 To build a single binary:
@@ -45,43 +45,43 @@ To build a single binary:
 bun run build
 ```
 
-The binary is written to `dist/cider-music`.
+The binary is written to `dist/setlist`.
 
 ## Quick Start
 
 ```bash
 # Current playback state
-cider-music status
+setlist status
 
 # Playback controls
-cider-music play
-cider-music pause
-cider-music next
-cider-music prev
-cider-music seek 60
+setlist play
+setlist pause
+setlist next
+setlist prev
+setlist seek 60
 
 # Volume and modes
-cider-music volume
-cider-music volume 60
-cider-music shuffle on
-cider-music repeat all
+setlist volume
+setlist volume 60
+setlist shuffle on
+setlist repeat all
 
 # Search
-cider-music search track "radiohead"
-cider-music search album "ok computer"
-cider-music search artist "faye wong"
+setlist search track "radiohead"
+setlist search album "ok computer"
+setlist search artist "faye wong"
 
 # Library
-cider-music library tracks
-cider-music library albums
-cider-music library playlists
-cider-music library playlist <playlist-id>
+setlist library tracks
+setlist library albums
+setlist library playlists
+setlist library playlist <playlist-id>
 
 # Library gardening
-cider-music library audit
-cider-music library duplicates
-cider-music library orphans
-cider-music library themes
+setlist library audit
+setlist library duplicates
+setlist library orphans
+setlist library themes
 ```
 
 ## Output Modes
@@ -89,16 +89,16 @@ cider-music library themes
 Every command supports three output modes:
 
 ```bash
-cider-music status          # human-readable
-cider-music status --json   # structured JSON
-cider-music status --plain  # tab-separated output
+setlist status          # human-readable
+setlist status --json   # structured JSON
+setlist status --plain  # tab-separated output
 ```
 
 Use `--json` for agents and scripts. Use `--plain` for shell pipelines.
 
 ## Engines
 
-Cider Music has three engines.
+Setlist has three engines.
 
 | Engine | Use it for | Auth |
 | --- | --- | --- |
@@ -112,16 +112,16 @@ API request fails, the real error is shown instead of silently falling back.
 Choose an engine per command:
 
 ```bash
-cider-music --engine native status
-cider-music --engine api search track "new song"
-cider-music --engine auto library audit
+setlist --engine native status
+setlist --engine api search track "new song"
+setlist --engine auto library audit
 ```
 
 Persist defaults:
 
 ```bash
-cider-music config engine auto
-cider-music config storefront auto
+setlist config engine auto
+setlist config storefront auto
 ```
 
 ## Apple Music API Auth
@@ -131,23 +131,23 @@ Native playback works without auth. API search and cloud-library reads need the
 `music.apple.com`.
 
 ```bash
-cider-music auth import --browser safari
-cider-music auth import --browser chrome
-cider-music auth import --browser firefox
-cider-music auth token <media-user-token>
-cider-music auth status
+setlist auth import --browser safari
+setlist auth import --browser chrome
+setlist auth import --browser firefox
+setlist auth token <media-user-token>
+setlist auth status
 ```
 
-Tokens are stored in macOS Keychain under the `cider-music` service. They are
+Tokens are stored in macOS Keychain under the `setlist` service. They are
 not written to config files.
 
 ## Library Gardening
 
-Cider Music treats your Apple Music library as a collection to maintain, not
+Setlist treats your Apple Music library as a collection to maintain, not
 just a list of tracks.
 
 ```bash
-cider-music library audit --json
+setlist library audit --json
 ```
 
 The audit reports:
@@ -165,17 +165,17 @@ The audit reports:
 Focused commands:
 
 ```bash
-cider-music library duplicates --json
-cider-music library orphans --json
-cider-music library themes --json
+setlist library duplicates --json
+setlist library orphans --json
+setlist library themes --json
 ```
 
 Useful limits while exploring:
 
 ```bash
-cider-music library audit --max-items 500
-cider-music library orphans --limit 50
-cider-music library themes --limit 10 --suggestions 50
+setlist library audit --max-items 500
+setlist library orphans --limit 50
+setlist library themes --limit 10 --suggestions 50
 ```
 
 These commands are safe review surfaces. They do not delete, remove, or add
@@ -256,7 +256,7 @@ bun run build
 Current test suite:
 
 ```bash
-bun test  # 56 tests across 11 files
+bun test  # 58 tests across 11 files
 ```
 
 ## Design Rules
@@ -264,7 +264,7 @@ bun test  # 56 tests across 11 files
 - Preserve human, `--json`, and `--plain` output for every command.
 - Keep IDs source-qualified.
 - Store tokens only in Keychain.
-- Use structured `CiderError` errors and output helpers.
+- Use structured `MusicError` errors and output helpers.
 - Keep library gardening read-only until an explicit apply/review flow exists.
 - Queue management intentionally fails because reliable Music.app queueing is
   not implemented.

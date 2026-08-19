@@ -1,14 +1,14 @@
 {
-  "name": "cider-music",
+  "name": "setlist",
   "version": "0.1.0",
   "description": "Apple Music CLI for power users and AI agents",
   "type": "module",
   "bin": {
-    "cider-music": "./src/index.ts"
+    "setlist": "./src/index.ts"
   },
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile dist/cider-music",
+    "build": "bun build src/index.ts --compile --outfile dist/setlist",
     "link": "bun link",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",

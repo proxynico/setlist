@@ -2,9 +2,9 @@ import type { Command } from "commander";
 import { loadConfig, setDefaultEngine, setStorefront } from "../lib/config";
 import { ValidationError } from "../lib/errors";
 import { getOutputMode, outputJson, outputKeyValue, outputMessage } from "../lib/output";
-import type { CiderConfig } from "../lib/types";
+import type { CliConfig } from "../lib/types";
 
-const ENGINES: CiderConfig["defaultEngine"][] = ["native", "api", "auto"];
+const ENGINES: CliConfig["defaultEngine"][] = ["native", "api", "auto"];
 const STOREFRONT_PATTERN = /^[a-z]{2}$/;
 
 export function registerConfigCommands(program: Command) {
@@ -42,11 +42,11 @@ export function registerConfigCommands(program: Command) {
         return;
       }
 
-      if (!ENGINES.includes(engine as CiderConfig["defaultEngine"])) {
+      if (!ENGINES.includes(engine as CliConfig["defaultEngine"])) {
         throw new ValidationError(`engine must be one of: ${ENGINES.join(", ")}`);
       }
 
-      await setDefaultEngine(engine as CiderConfig["defaultEngine"]);
+      await setDefaultEngine(engine as CliConfig["defaultEngine"]);
       if (mode === "json") {
         outputJson({ defaultEngine: engine });
       } else {

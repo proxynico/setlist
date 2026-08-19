@@ -67,7 +67,7 @@ export function validateRawId(id: string, label: string): string {
   if (!id || !SAFE_ID_PATTERN.test(id)) {
     throw new ValidationError(
       `${label} "${id}" contains invalid characters.`,
-      "IDs must be alphanumeric (with dots, hyphens, or underscores). Get valid IDs with: cider-music ... --json",
+      "IDs must be alphanumeric (with dots, hyphens, or underscores). Get valid IDs with: setlist ... --json",
     );
   }
   return id;
