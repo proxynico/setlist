@@ -65,6 +65,7 @@ src/
     library-audit.ts    Read-only library gardening analysis
     config.ts           Config and token facade
     cookies.ts          Browser cookie extraction
+    safari-cookies.ts   Safari binarycookies parser
     secrets.ts          Keychain storage
 tests/
   api-parsing.test.ts   API identity, validation, storefront, pagination
@@ -123,7 +124,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 58 tests across 11 files
+bun test  # 61 tests across 12 files
 ```
 
 ## macOS Notes

@@ -1,6 +1,9 @@
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { $ } from "bun";
 import { setMediaUserToken } from "./config";
 import { ExternalServiceError, ValidationError } from "./errors";
+import { parseSafariBinaryCookies, pickMediaUserToken } from "./safari-cookies";
 
 /**
  * Extract the media-user-token cookie from a browser's cookie store.
@@ -36,18 +39,50 @@ export async function importCookiesFromBrowser(browser: Browser): Promise<string
   }
 }
 
+/** Read and pick media-user-token from a Safari binarycookies file. */
+async function readSafariBinaryToken(path: string): Promise<string | undefined> {
+  const data = await readFile(path);
+  return pickMediaUserToken(parseSafariBinaryCookies(data));
+}
+
+/** Pull media-user-token from Safari's binary cookie store, then legacy SQLite. */
 async function importSafariCookie(): Promise<string> {
-  // Safari on modern macOS uses a SQLite database for cookies.
-  // Use parameterized queries via -cmd to avoid SQL injection.
+  const home = process.env.HOME || "";
+  const errors: string[] = [];
+  const binaryPaths = [
+    "~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies",
+    "~/Library/Cookies/Cookies.binarycookies",
+  ];
+
+  for (const dbPath of binaryPaths) {
+    const expanded = dbPath.replace("~", home);
+    if (!existsSync(expanded)) {
+      errors.push(`${dbPath}: file not found`);
+      continue;
+    }
+    try {
+      const token = await readSafariBinaryToken(expanded);
+      if (token) {
+        await setMediaUserToken(token);
+        return token;
+      }
+      errors.push(`${dbPath}: no media-user-token cookie found`);
+    } catch (err) {
+      errors.push(`${dbPath}: ${(err as Error).message}`);
+    }
+  }
+
   const cookieDbPaths = [
     "~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.db",
     "~/Library/Cookies/Cookies.db",
   ];
 
-  const errors: string[] = [];
-
   for (const dbPath of cookieDbPaths) {
-    const expanded = dbPath.replace("~", process.env.HOME || "");
+    const expanded = dbPath.replace("~", home);
+    if (!existsSync(expanded)) {
+      errors.push(`${dbPath}: file not found`);
+      continue;
+    }
     const result = await withTimeout(
       $`sqlite3 ${expanded} "SELECT value FROM cookies WHERE name='media-user-token' AND domain LIKE '%apple.com%' LIMIT 1;"`
         .quiet()
@@ -57,6 +92,10 @@ async function importSafariCookie(): Promise<string> {
     );
     if (result.exitCode !== 0) {
       const stderr = result.stderr.toString().trim();
+      if (stderr.includes("no such table")) {
+        errors.push(`${dbPath}: not a Safari cookie database`);
+        continue;
+      }
       errors.push(`${dbPath}: ${stderr || `exit code ${result.exitCode}`}`);
       continue;
     }
@@ -75,8 +114,9 @@ async function importSafariCookie(): Promise<string> {
       "",
       "Make sure you're logged into music.apple.com in Safari.",
       "You may need to grant Full Disk Access to Terminal in System Settings > Privacy.",
+      "Or copy media-user-token from Safari Web Inspector > Storage > Cookies.",
       "",
-      "Alternatively, paste the token manually:",
+      "Then paste it with:",
       "  setlist auth token <paste-token-here>",
     ].join("\n"),
   );
