@@ -2,6 +2,9 @@
 
 Apple Music from the command line.
 
+Setlist remains maintained. Settled 24 October 2026 by Nico. Rejected: retiring
+Setlist or treating it as archived.
+
 Setlist controls Music.app on macOS, searches Apple Music, reads your
 library, and helps audit and improve your playlists. It is built for both
 humans and agents: every command has readable terminal output plus `--json` and
