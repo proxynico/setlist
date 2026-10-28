@@ -138,8 +138,8 @@ setlist auth status
 setlist auth clear
 ```
 
-The token is kept in the macOS Keychain under the `setlist` service and never
-written to a file.
+The token is kept in the macOS Keychain under the `setlist` service, not in
+config files.
 
 ## Library Gardening
 
