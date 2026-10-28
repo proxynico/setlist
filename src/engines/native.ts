@@ -1,7 +1,6 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
 import type {
-  EngineCapabilities,
   MusicEngine,
   Track,
   Album,
@@ -12,14 +11,20 @@ import type {
   SearchResults,
   SearchType,
   Device,
+  DeviceKind,
+  RepeatMode,
 } from "../lib/types";
-import { buildIdentity, parseEntityRef, validateRawId } from "../lib/entities";
-import { ExternalServiceError, UnsupportedOperationError } from "../lib/errors";
-import type { DeviceKind } from "../lib/types";
+import { buildIdentity, resolveRawId } from "../lib/entities";
+import { ExternalServiceError, MusicError } from "../lib/errors";
+import { summarizePlaylistTracks } from "../lib/library-audit";
 
 /**
  * macOS native engine — controls Music.app via JXA (JavaScript for Automation).
  * No auth needed, no rate limits. macOS only.
+ *
+ * Every Apple Event costs ~25ms, so reads fetch whole collections with bulk
+ * property getters (`tracks.name()`) or one `properties()` record per track,
+ * never one event per field.
  */
 
 const SYSTEM_MUSIC_APP_PATH = "/System/Applications/Music.app";
@@ -28,18 +33,10 @@ export function createMusicApplicationSource(appPath = SYSTEM_MUSIC_APP_PATH): s
   return existsSync(appPath) ? `Application(${JSON.stringify(appPath)})` : 'Application("Music")';
 }
 
-function resolveMusicApplicationReferences(script: string): string {
-  return script.replaceAll('Application("Music")', createMusicApplicationSource());
-}
+const MUSIC_APP = createMusicApplicationSource();
 
 export function shouldRetryAfterMusicError(error: string): boolean {
-  return (
-    error.includes("not running") ||
-    error.includes("-1728") ||
-    error.includes("-1701") ||
-    error.includes("-10827") ||
-    error.includes("Parameter is missing")
-  );
+  return error.includes("not running") || error.includes("-1728") || isMusicScriptingUnavailableError(error);
 }
 
 function isMusicScriptingUnavailableError(error: string): boolean {
@@ -53,91 +50,94 @@ export function musicScriptingUnavailableRecovery(): string {
   ].join(" ");
 }
 
+async function osascript(script: string) {
+  const result = await $`osascript -l JavaScript -e ${script}`.quiet().nothrow();
+  return {
+    ok: result.exitCode === 0,
+    stdout: result.stdout.toString().trim(),
+    stderr: result.stderr.toString().trim(),
+  };
+}
+
 async function ensureMusicRunning(): Promise<void> {
-  const musicApp = createMusicApplicationSource();
-  const check = await $`osascript -l JavaScript -e ${`${musicApp}.running()`}`.quiet().nothrow();
-  if (check.stdout.toString().trim() === "true") return;
+  const isRunning = async () => (await osascript(`${MUSIC_APP}.running()`)).stdout === "true";
+  if (await isRunning()) return;
 
   // Launch hidden — no window popping up
-  await $`osascript -l JavaScript -e ${`const app = ${musicApp}; app.launch()`}`.quiet().nothrow();
-  if (musicApp !== 'Application("Music")') {
+  await osascript(`${MUSIC_APP}.launch()`);
+  if (MUSIC_APP !== 'Application("Music")') {
     await $`open -gj ${SYSTEM_MUSIC_APP_PATH}`.quiet().nothrow();
   }
 
   // Wait up to 5s for it to be ready
   for (let i = 0; i < 10; i++) {
     await Bun.sleep(500);
-    const ready = await $`osascript -l JavaScript -e ${`${musicApp}.running()`}`.quiet().nothrow();
-    if (ready.stdout.toString().trim() === "true") return;
+    if (await isRunning()) return;
   }
   throw new ExternalServiceError("Music.app failed to start.", "Try opening Music.app manually.");
 }
 
-async function jxa(script: string): Promise<string> {
-  const resolvedScript = resolveMusicApplicationReferences(script);
-  const result = await $`osascript -l JavaScript -e ${resolvedScript}`.quiet().nothrow();
-  if (result.exitCode !== 0) {
-    const err = result.stderr.toString().trim();
-    // Music.app not running — launch it silently and retry
-    if (shouldRetryAfterMusicError(err)) {
-      try {
-        await ensureMusicRunning();
-      } catch (launchErr) {
-        if (isMusicScriptingUnavailableError(err)) {
-          throw new ExternalServiceError(
-            "Music.app could not be launched or controlled by this process.",
-            musicScriptingUnavailableRecovery(),
-            launchErr,
-          );
-        }
-        throw launchErr;
-      }
-      const retry = await $`osascript -l JavaScript -e ${resolvedScript}`.quiet().nothrow();
-      if (retry.exitCode !== 0) {
-        const retryErr = retry.stderr.toString().trim();
-        if (isMusicScriptingUnavailableError(retryErr)) {
-          throw new ExternalServiceError(
-            "Music.app could not be launched or controlled by this process.",
-            musicScriptingUnavailableRecovery(),
-          );
-        }
-        throw new ExternalServiceError(`JXA error: ${retryErr}`);
-      }
-      return retry.stdout.toString().trim();
-    }
-    throw new ExternalServiceError(`JXA error: ${err}`);
+function scriptError(stderr: string, cause?: unknown): ExternalServiceError {
+  if (isMusicScriptingUnavailableError(stderr)) {
+    return new ExternalServiceError(
+      "Music.app could not be launched or controlled by this process.",
+      musicScriptingUnavailableRecovery(),
+      cause,
+    );
   }
-  return result.stdout.toString().trim();
+  // "execution error: Error: Error: Playlist not found (-2700)" → "Playlist not found"
+  const message = stderr.replace(/^.*?execution error: (?:Error: )*/s, "").replace(/ \(-?\d+\)$/, "");
+  return new ExternalServiceError(`Music.app: ${message || stderr}`);
 }
 
-async function jxaJson<T>(script: string): Promise<T> {
-  const wrapped = `
-    const result = (() => { ${script} })();
-    JSON.stringify(result);
-  `;
-  const raw = await jxa(wrapped);
-  return JSON.parse(raw);
+/** Run a JXA script with `music` bound to Music.app; launch Music.app and retry once if it isn't ready. */
+async function jxa(body: string): Promise<string> {
+  const script = `const music = ${MUSIC_APP};\n${body}`;
+  let result = await osascript(script);
+  if (!result.ok && shouldRetryAfterMusicError(result.stderr)) {
+    try {
+      await ensureMusicRunning();
+    } catch (launchErr) {
+      if (isMusicScriptingUnavailableError(result.stderr)) throw scriptError(result.stderr, launchErr);
+      throw launchErr;
+    }
+    result = await osascript(script);
+  }
+  if (!result.ok) throw scriptError(result.stderr);
+  return result.stdout;
 }
 
-function parseTrack(raw: NativeTrackData): Track {
+async function jxaJson<T>(body: string): Promise<T> {
+  return JSON.parse(await jxa(`JSON.stringify((() => {\n${body}\n})());`));
+}
+
+// JXA helpers for scripts that read tracks. `readTracks` bulk-reads a track
+// collection in eight Apple Events; `findPlaylist` fails clearly on unknown IDs.
+const JXA_HELPERS = `
+function readTracks(tracks) {
+  if (tracks.length === 0) return [];
+  const persistentId = tracks.persistentID(), name = tracks.name(), artist = tracks.artist(), album = tracks.album(),
+    duration = tracks.duration(), trackNumber = tracks.trackNumber(), genre = tracks.genre(), year = tracks.year();
+  return persistentId.map((id, i) => ({
+    persistentId: id, name: name[i], artist: artist[i], album: album[i],
+    duration: duration[i], trackNumber: trackNumber[i], genre: genre[i], year: year[i],
+  }));
+}
+function trackFromProperties(p) {
   return {
-    ...buildIdentity({
-      source: "native",
-      persistentId: String(raw.persistentID ?? raw.id ?? ""),
-    }),
-    name: raw.name ?? "Unknown",
-    artist: raw.artist ?? "Unknown",
-    album: raw.album ?? "",
-    duration: raw.duration ?? 0,
-    trackNumber: raw.trackNumber,
-    genre: raw.genre || undefined,
-    year: raw.year || undefined,
+    persistentId: p.persistentID, name: p.name, artist: p.artist, album: p.album,
+    duration: p.duration, trackNumber: p.trackNumber, genre: p.genre, year: p.year,
   };
 }
+function findPlaylist(id) {
+  const matches = music.playlists.whose({ persistentID: id });
+  if (matches.length === 0) throw new Error("Playlist not found: " + id);
+  return matches[0];
+}
+`;
 
 interface NativeTrackData {
-  id?: number;
-  persistentID?: string;
+  persistentId: string;
   name?: string;
   artist?: string;
   album?: string;
@@ -147,184 +147,177 @@ interface NativeTrackData {
   year?: number;
 }
 
-// Shared JXA expression that extracts raw track fields from a Music.app track
-// reference named `t`. Every native track read returns this shape and is mapped
-// to a Track through `parseTrack`, so IDs are constructed in exactly one place.
-const JXA_TRACK_FIELDS = `{
-  id: t.persistentID(),
-  name: t.name(),
-  artist: t.artist(),
-  album: t.album(),
-  duration: t.duration(),
-  trackNumber: t.trackNumber(),
-  genre: t.genre() || undefined,
-  year: t.year() || undefined,
-}`;
-
-const NATIVE_CAPABILITIES: EngineCapabilities = {
-  playback: true,
-  queue: false,
-  playlistMutation: true,
-  devices: true,
-  catalogSearch: false,
-  libraryRead: true,
-  shuffle: true,
-  repeat: true,
-};
-
-function resolvePersistentId(id: string, entityLabel: string): string {
-  const ref = parseEntityRef(id);
-  if (ref) {
-    if (ref.source !== "native" || ref.kind !== "persistent") {
-      throw new UnsupportedOperationError(
-        `${entityLabel} ${id} is not a native persistent ID`,
-        `Use \`setlist --engine native ... --json\` and pass the ${entityLabel.toLowerCase()}'s \`persistentId\` field for native-only commands.`,
-      );
-    }
-    return validateRawId(ref.value, entityLabel);
-  }
-  return validateRawId(id, entityLabel);
+function parseTrack(raw: NativeTrackData): Track {
+  return {
+    ...buildIdentity({ source: "native", persistentId: raw.persistentId }),
+    name: raw.name ?? "Unknown",
+    artist: raw.artist ?? "Unknown",
+    album: raw.album ?? "",
+    duration: raw.duration ?? 0,
+    trackNumber: raw.trackNumber || undefined,
+    genre: raw.genre || undefined,
+    year: raw.year || undefined,
+  };
 }
 
-const VALID_DEVICE_KINDS = new Set<string>(["airplay", "bluetooth", "computer"]);
+function resolvePersistentId(id: string, label: "Track" | "Playlist"): string {
+  return resolveRawId(id, {
+    source: "native",
+    kind: "persistent",
+    label,
+    description: "a native persistent ID",
+    hint: `Use \`setlist --engine native ... --json\` and pass the ${label.toLowerCase()}'s \`persistentId\` field for native-only commands.`,
+  });
+}
 
 function normalizeDeviceKind(raw: string | undefined): DeviceKind {
-  if (raw && VALID_DEVICE_KINDS.has(raw)) return raw as DeviceKind;
-  return "unknown";
+  // Music.app reports e.g. "computer", "Bluetooth device", "AirPlay device", "Apple TV", "HomePod", "unknown".
+  const kind = raw?.toLowerCase() ?? "unknown";
+  if (kind.includes("bluetooth")) return "bluetooth";
+  if (kind === "computer") return "computer";
+  if (kind === "unknown") return "unknown";
+  return "airplay";
 }
 
 export function deriveAlbumsFromTracks(tracks: Track[], limit = 20): Album[] {
-  const albums: Album[] = [];
-  const seen = new Set<string>();
+  const albums = new Map<string, Album>();
   for (const track of tracks) {
-    if (!track.album) continue;
     const key = `${track.album}::${track.artist}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    albums.push({
+    if (!track.album || albums.has(key)) continue;
+    albums.set(key, {
       ...buildIdentity({ source: "native", derivedId: `album:${key}` }),
       name: track.album,
       artist: track.artist,
-      trackCount: 0,
       year: track.year,
       genre: track.genre,
     });
   }
-  return albums.slice(0, limit);
+  return [...albums.values()].slice(0, limit);
 }
 
 export function deriveArtistsFromTracks(tracks: Track[], limit = 20): Artist[] {
-  const artists: Artist[] = [];
-  const seen = new Set<string>();
+  const artists = new Map<string, Artist>();
   for (const track of tracks) {
-    if (seen.has(track.artist)) continue;
-    seen.add(track.artist);
-    artists.push({
+    if (artists.has(track.artist)) continue;
+    artists.set(track.artist, {
       ...buildIdentity({ source: "native", derivedId: `artist:${track.artist}` }),
       name: track.artist,
       genre: track.genre,
     });
   }
-  return artists.slice(0, limit);
+  return [...artists.values()].slice(0, limit);
+}
+
+interface AlbumColumns {
+  album: string[];
+  artist: string[];
+  year: number[];
+  genre: string[];
+}
+
+function groupAlbums(columns: AlbumColumns): Album[] {
+  const albums = new Map<string, Album & { trackCount: number }>();
+  for (const [i, name] of columns.album.entries()) {
+    if (!name) continue;
+    const artist = columns.artist[i];
+    const key = `${name}::${artist}`;
+    const album = albums.get(key);
+    if (album) {
+      album.trackCount += 1;
+      continue;
+    }
+    albums.set(key, {
+      ...buildIdentity({ source: "native", derivedId: `album:${key}` }),
+      name,
+      artist,
+      trackCount: 1,
+      year: columns.year[i] || undefined,
+      genre: columns.genre[i] || undefined,
+    });
+  }
+  return [...albums.values()];
 }
 
 export class NativeEngine implements MusicEngine {
-  name = "native";
-  capabilities = NATIVE_CAPABILITIES;
-
   async play(query?: string): Promise<void> {
     if (!query) {
-      await jxa(`
-        const music = Application("Music");
-        music.play();
-      `);
+      await jxa("music.play();");
       return;
     }
 
-    // Search and play the first result
-    await jxa(`
-      const music = Application("Music");
-      const tracks = music.search(music.libraryPlaylists[0], { for: ${JSON.stringify(query)} });
-      if (tracks.length === 0) {
-        // Try playing by name directly
-        music.play();
-      } else {
-        music.play(tracks[0]);
-      }
+    const played = await jxa(`
+      const found = music.search(music.libraryPlaylists[0], { for: ${JSON.stringify(query)} }) || [];
+      if (found.length > 0) music.play(found[0]);
+      found.length > 0;
     `);
+    if (played !== "true") {
+      throw new MusicError(`No library tracks match "${query}"`, {
+        code: "not_found",
+        hint: "Check the spelling, or find a track with `setlist --engine native search track <query>`.",
+      });
+    }
   }
 
   async pause(): Promise<void> {
-    await jxa(`Application("Music").pause();`);
+    await jxa("music.pause();");
   }
 
   async resume(): Promise<void> {
-    await jxa(`Application("Music").play();`);
+    await jxa("music.play();");
   }
 
   async next(): Promise<void> {
-    await jxa(`Application("Music").nextTrack();`);
+    await jxa("music.nextTrack();");
   }
 
   async previous(): Promise<void> {
-    await jxa(`Application("Music").previousTrack();`);
+    await jxa("music.previousTrack();");
   }
 
   async seek(seconds: number): Promise<void> {
-    await jxa(`Application("Music").playerPosition = ${seconds};`);
+    await jxa(`music.playerPosition = ${seconds};`);
   }
 
   async setVolume(level: number): Promise<void> {
     const clamped = Math.max(0, Math.min(100, Math.round(level)));
-    await jxa(`Application("Music").soundVolume = ${clamped};`);
+    await jxa(`music.soundVolume = ${clamped};`);
   }
 
   async getVolume(): Promise<number> {
-    const raw = await jxa(`Application("Music").soundVolume();`);
-    return parseInt(raw, 10);
+    return Number.parseInt(await jxa("music.soundVolume();"), 10);
   }
 
   async setShuffle(enabled: boolean): Promise<void> {
-    await jxa(`Application("Music").shuffleEnabled = ${enabled};`);
+    await jxa(`music.shuffleEnabled = ${enabled};`);
   }
 
   async getShuffle(): Promise<boolean> {
-    const raw = await jxa(`Application("Music").shuffleEnabled();`);
-    return raw === "true";
+    return (await jxa("music.shuffleEnabled();")) === "true";
   }
 
-  async setRepeat(mode: "off" | "one" | "all"): Promise<void> {
-    await jxa(`Application("Music").songRepeat = ${JSON.stringify(mode)};`);
+  async setRepeat(mode: RepeatMode): Promise<void> {
+    await jxa(`music.songRepeat = ${JSON.stringify(mode)};`);
   }
 
-  async getRepeat(): Promise<"off" | "one" | "all"> {
-    const raw = await jxa(`Application("Music").songRepeat();`);
-    return raw === "one" || raw === "all" ? raw : "off";
+  async getRepeat(): Promise<RepeatMode> {
+    return normalizeRepeat(await jxa("music.songRepeat();"));
   }
 
   async getStatus(): Promise<PlaybackState> {
-    const raw = await jxaJson<{
-      state: PlaybackState["state"];
-      track: NativeTrackData | null;
-      position: number;
-      volume: number;
-      shuffleEnabled: boolean;
-      repeatMode: string;
-    }>(`
-      const music = Application("Music");
-      const state = music.playerState();
-      const stateMap = { "playing": "playing", "paused": "paused", "stopped": "stopped", "fast forwarding": "playing", "rewinding": "playing" };
-      const mapped = stateMap[state] || "stopped";
-
-      if (mapped === "stopped") {
-        return { state: "stopped", track: null, position: 0, volume: music.soundVolume(), shuffleEnabled: music.shuffleEnabled(), repeatMode: "off" };
+    const raw = await jxaJson<
+      Omit<PlaybackState, "track" | "repeatMode"> & {
+        track: NativeTrackData | null;
+        repeatMode: string;
       }
-
-      const t = music.currentTrack;
+    >(`
+      ${JXA_HELPERS}
+      const stateMap = { playing: "playing", paused: "paused", stopped: "stopped", "fast forwarding": "playing", rewinding: "playing" };
+      const state = stateMap[music.playerState()] || "stopped";
+      const active = state !== "stopped";
       return {
-        state: mapped,
-        track: ${JXA_TRACK_FIELDS},
-        position: music.playerPosition(),
+        state,
+        track: active ? trackFromProperties(music.currentTrack.properties()) : null,
+        position: active ? music.playerPosition() : 0,
         volume: music.soundVolume(),
         shuffleEnabled: music.shuffleEnabled(),
         repeatMode: music.songRepeat(),
@@ -332,78 +325,49 @@ export class NativeEngine implements MusicEngine {
     `);
 
     return {
-      state: raw.state,
+      ...raw,
       track: raw.track ? parseTrack(raw.track) : null,
-      position: raw.position,
-      volume: raw.volume,
-      shuffleEnabled: raw.shuffleEnabled,
-      repeatMode: raw.repeatMode === "one" || raw.repeatMode === "all" ? raw.repeatMode : "off",
+      repeatMode: normalizeRepeat(raw.repeatMode),
     };
   }
 
   async search(query: string, types: SearchType[], limit = 20): Promise<SearchResults> {
-    const results: SearchResults = { tracks: [], albums: [], artists: [], playlists: [] };
-
-    const needsTrackSearch = types.length === 0 || types.some((type) => type !== "playlist");
-    const tracks = needsTrackSearch
-      ? await jxaJson<NativeTrackData[]>(`
-        const music = Application("Music");
-        const found = music.search(music.libraryPlaylists[0], { for: ${JSON.stringify(query)} });
-        const limit = ${limit};
-        const tracks = [];
-        for (let i = 0; i < Math.min(found.length, limit); i++) {
-          const t = found[i];
-          tracks.push(${JXA_TRACK_FIELDS});
-        }
-        return tracks;
-      `)
-      : [];
-    const parsedTracks = tracks.map(parseTrack);
-
-    if (types.includes("track") || types.length === 0) {
-      results.tracks = parsedTracks;
-    }
-
-    if (types.includes("playlist")) {
-      const playlists = await this.getPlaylists();
+    const searchTracks = async () =>
+      (
+        await jxaJson<NativeTrackData[]>(`
+          ${JXA_HELPERS}
+          const found = music.search(music.libraryPlaylists[0], { for: ${JSON.stringify(query)} }) || [];
+          return found.slice(0, ${limit}).map((t) => trackFromProperties(t.properties()));
+        `)
+      ).map(parseTrack);
+    const searchPlaylists = async () => {
       const q = query.toLowerCase();
-      results.playlists = playlists.filter((p) => p.name.toLowerCase().includes(q)).slice(0, limit);
-    }
+      return (await this.getPlaylists()).filter((p) => p.name.toLowerCase().includes(q)).slice(0, limit);
+    };
 
-    // Albums and artists are derived from track search results (Music.app search only returns tracks)
-    if (types.includes("album")) {
-      results.albums = deriveAlbumsFromTracks(parsedTracks, limit);
-    }
+    // Music.app search only returns tracks; albums and artists are derived from them.
+    const [tracks, playlists] = await Promise.all([
+      types.some((type) => type !== "playlist") ? searchTracks() : [],
+      types.includes("playlist") ? searchPlaylists() : [],
+    ]);
 
-    if (types.includes("artist")) {
-      results.artists = deriveArtistsFromTracks(parsedTracks, limit);
-    }
-
-    return results;
-  }
-
-  async addToQueue(trackId: string): Promise<void> {
-    const persistentId = resolvePersistentId(trackId, "Track");
-    throw new UnsupportedOperationError(
-      `Queue management for track ${persistentId} is not implemented reliably for Music.app.`,
-      "The previous implementation interrupted playback. Use `setlist play <query>` for now instead of `queue add`.",
-    );
+    return {
+      tracks: types.includes("track") ? tracks : [],
+      albums: types.includes("album") ? deriveAlbumsFromTracks(tracks, limit) : [],
+      artists: types.includes("artist") ? deriveArtistsFromTracks(tracks, limit) : [],
+      playlists,
+    };
   }
 
   async getPlaylists(): Promise<Playlist[]> {
     const raw = await jxaJson<Array<{ persistentId: string; name: string; trackCount: number }>>(`
-      const music = Application("Music");
-      const playlists = music.playlists();
+      const playlists = music.playlists;
+      const kinds = playlists.specialKind(), ids = playlists.persistentID(), names = playlists.name();
       const result = [];
-      for (const p of playlists) {
-        const kind = p.specialKind();
-        // Skip internal playlists (Library, Music, etc.)
-        if (kind === "none" || kind === "folder") {
-          result.push({
-            persistentId: p.persistentID(),
-            name: p.name(),
-            trackCount: p.tracks.length,
-          });
+      for (let i = 0; i < ids.length; i++) {
+        // Skip Music's built-in playlists (Library, Music, Purchased...)
+        if (kinds[i] === "none" || kinds[i] === "folder") {
+          result.push({ persistentId: ids[i], name: names[i], trackCount: playlists[i].tracks.length });
         }
       }
       return result;
@@ -417,189 +381,112 @@ export class NativeEngine implements MusicEngine {
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
     const persistentId = resolvePersistentId(playlistId, "Playlist");
-    const info = await jxaJson<{ name: string; description: string; trackCount: number; hasArtwork: boolean }>(`
-      const music = Application("Music");
-      const playlists = music.playlists.whose({ persistentID: ${JSON.stringify(persistentId)} });
-      if (playlists.length === 0) throw new Error("Playlist not found");
-      const p = playlists[0];
-      return {
-        name: p.name(),
-        description: p.description() || "",
-        trackCount: p.tracks.length,
-        hasArtwork: p.artworks.length > 0,
-      };
-    `);
-
-    // Export artwork if it exists
-    let artworkPath: string | undefined;
-    if (info.hasArtwork) {
+    const artworkPath = `/tmp/setlist-artwork-${persistentId}.png`;
+    const info = await jxaJson<{ name: string; description: string; tracks: NativeTrackData[]; hasArtwork: boolean }>(`
+      ${JXA_HELPERS}
+      const p = findPlaylist(${JSON.stringify(persistentId)});
+      let hasArtwork = false;
       try {
-        const tmpPath = `/tmp/setlist-artwork-${persistentId}.png`;
-        await jxa(`
-          const music = Application("Music");
-          const p = music.playlists.whose({ persistentID: ${JSON.stringify(persistentId)} })[0];
-          const artwork = p.artworks[0];
-          const rawData = artwork.rawData();
+        if (p.artworks.length > 0) {
           const app = Application.currentApplication();
           app.includeStandardAdditions = true;
-          const file = app.openForAccess(Path(${JSON.stringify(tmpPath)}), { writePermission: true });
+          const file = app.openForAccess(Path(${JSON.stringify(artworkPath)}), { writePermission: true });
           app.setEof(file, { to: 0 });
-          app.write(rawData, { to: file });
+          app.write(p.artworks[0].rawData(), { to: file });
           app.closeAccess(file);
-        `);
-        artworkPath = tmpPath;
-      } catch {
-        // Artwork export failed — not critical
+          hasArtwork = true;
+        }
+      } catch (e) {
+        // Artwork export is best effort.
       }
-    }
+      return { name: p.name(), description: p.description() || "", tracks: readTracks(p.tracks), hasArtwork };
+    `);
 
-    // Get tracks for analysis
-    const tracks = await this.getPlaylistTracks(playlistId);
-
-    // Compute top artists
-    const artistCounts = new Map<string, number>();
-    for (const t of tracks) {
-      artistCounts.set(t.artist, (artistCounts.get(t.artist) || 0) + 1);
-    }
-    const topArtists = Array.from(artistCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 15)
-      .map(([name, count]) => ({ name, count }));
-
-    // Compute genres
-    const genreCounts = new Map<string, number>();
-    for (const t of tracks) {
-      const g = t.genre || "Unknown";
-      genreCounts.set(g, (genreCounts.get(g) || 0) + 1);
-    }
-    const genres = Array.from(genreCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([name, count]) => ({ name, count }));
-
-    const totalDuration = tracks.reduce((sum, t) => sum + t.duration, 0);
-
+    const tracks = info.tracks.map(parseTrack);
     return {
       ...buildIdentity({ source: "native", persistentId }),
       name: info.name,
       description: info.description || undefined,
-      trackCount: info.trackCount,
-      totalDuration,
-      artworkPath,
+      trackCount: tracks.length,
+      artworkPath: info.hasArtwork ? artworkPath : undefined,
       tracks,
-      topArtists,
-      genres,
+      ...summarizePlaylistTracks(tracks),
     };
   }
 
   async addToPlaylist(playlistId: string, trackIds: string[]): Promise<void> {
-    const persistentPlaylistId = resolvePersistentId(playlistId, "Playlist");
-    for (const trackId of trackIds) {
-      const persistentTrackId = resolvePersistentId(trackId, "Track");
-      await jxa(`
-        const music = Application("Music");
-        const playlist = music.playlists.whose({ persistentID: ${JSON.stringify(persistentPlaylistId)} })[0];
-        if (!playlist) throw new Error("Playlist not found: " + ${JSON.stringify(persistentPlaylistId)});
-        const lib = music.libraryPlaylists[0];
-        const tracks = lib.tracks.whose({ persistentID: ${JSON.stringify(persistentTrackId)} });
-        if (tracks.length === 0) throw new Error("Track not found: " + ${JSON.stringify(persistentTrackId)});
-        music.duplicate(tracks[0], { to: playlist });
-      `);
-    }
+    const playlist = resolvePersistentId(playlistId, "Playlist");
+    const tracks = trackIds.map((id) => resolvePersistentId(id, "Track"));
+    // Resolve every track before adding any, so a bad ID leaves the playlist unchanged.
+    await jxa(`
+      ${JXA_HELPERS}
+      const playlist = findPlaylist(${JSON.stringify(playlist)});
+      const library = music.libraryPlaylists[0];
+      const tracks = ${JSON.stringify(tracks)}.map((id) => {
+        const matches = library.tracks.whose({ persistentID: id });
+        if (matches.length === 0) throw new Error("Track not found: " + id);
+        return matches[0];
+      });
+      for (const track of tracks) music.duplicate(track, { to: playlist });
+    `);
   }
 
   async removeFromPlaylist(playlistId: string, trackIds: string[]): Promise<void> {
-    const persistentPlaylistId = resolvePersistentId(playlistId, "Playlist");
-    for (const trackId of trackIds) {
-      const persistentTrackId = resolvePersistentId(trackId, "Track");
-      await jxa(`
-        const music = Application("Music");
-        const playlist = music.playlists.whose({ persistentID: ${JSON.stringify(persistentPlaylistId)} })[0];
-        if (!playlist) throw new Error("Playlist not found: " + ${JSON.stringify(persistentPlaylistId)});
-        const tracks = playlist.tracks.whose({ persistentID: ${JSON.stringify(persistentTrackId)} });
-        if (tracks.length === 0) throw new Error("Track not found in playlist: " + ${JSON.stringify(persistentTrackId)});
-        tracks[0].delete();
-      `);
-    }
+    const playlist = resolvePersistentId(playlistId, "Playlist");
+    const tracks = trackIds.map((id) => resolvePersistentId(id, "Track"));
+    await jxa(`
+      ${JXA_HELPERS}
+      const playlist = findPlaylist(${JSON.stringify(playlist)});
+      const tracks = ${JSON.stringify(tracks)}.map((id) => {
+        const matches = playlist.tracks.whose({ persistentID: id });
+        if (matches.length === 0) throw new Error("Track not found in playlist: " + id);
+        return matches[0];
+      });
+      for (const track of tracks) track.delete();
+    `);
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
     const persistentId = resolvePersistentId(playlistId, "Playlist");
     const raw = await jxaJson<NativeTrackData[]>(`
-      const music = Application("Music");
-      const playlists = music.playlists.whose({ persistentID: ${JSON.stringify(persistentId)} });
-      if (playlists.length === 0) throw new Error("Playlist not found");
-      const tracks = playlists[0].tracks();
-      return tracks.map(t => (${JXA_TRACK_FIELDS}));
+      ${JXA_HELPERS}
+      return readTracks(findPlaylist(${JSON.stringify(persistentId)}).tracks);
     `);
     return raw.map(parseTrack);
   }
 
   async getLibraryTracks(limit = 50, offset = 0): Promise<Track[]> {
     const raw = await jxaJson<NativeTrackData[]>(`
-      const music = Application("Music");
-      const allTracks = music.libraryPlaylists[0].tracks();
-      const start = ${offset};
-      const end = Math.min(start + ${limit}, allTracks.length);
-      const result = [];
-      for (let i = start; i < end; i++) {
-        const t = allTracks[i];
-        result.push(${JXA_TRACK_FIELDS});
-      }
-      return result;
+      ${JXA_HELPERS}
+      return readTracks(music.libraryPlaylists[0].tracks).slice(${offset}, ${offset + limit});
     `);
     return raw.map(parseTrack);
   }
 
   async getLibraryAlbums(limit = 50, offset = 0): Promise<Album[]> {
-    const raw = await jxaJson<
-      Array<{ album: string; artist: string; trackCount: number; year?: number; genre?: string }>
-    >(`
-      const music = Application("Music");
-      const allTracks = music.libraryPlaylists[0].tracks();
-      const albumMap = {};
-
-      for (let i = 0; i < allTracks.length; i++) {
-        const t = allTracks[i];
-        const album = t.album();
-        const artist = t.artist();
-        if (!album) continue;
-        const key = album + "::" + artist;
-        if (!albumMap[key]) {
-          albumMap[key] = {
-            album,
-            artist,
-            trackCount: 0,
-            year: t.year() || undefined,
-            genre: t.genre() || undefined,
-          };
-        }
-        albumMap[key].trackCount += 1;
-      }
-
-      return Object.values(albumMap).slice(${offset}, ${offset} + ${limit});
+    const columns = await jxaJson<AlbumColumns>(`
+      const tracks = music.libraryPlaylists[0].tracks;
+      if (tracks.length === 0) return { album: [], artist: [], year: [], genre: [] };
+      return { album: tracks.album(), artist: tracks.artist(), year: tracks.year(), genre: tracks.genre() };
     `);
-    return raw.map((a) => ({
-      ...buildIdentity({ source: "native", derivedId: `album:${a.album}::${a.artist}` }),
-      name: a.album,
-      artist: a.artist,
-      trackCount: a.trackCount,
-      year: a.year,
-      genre: a.genre,
-    }));
+    return groupAlbums(columns).slice(offset, offset + limit);
   }
 
   async getDevices(): Promise<Device[]> {
-    const raw = await jxaJson<Array<{ id: string; name: string; kind?: string; active: boolean }>>(`
-      const music = Application("Music");
-      const devices = music.AirPlayDevices();
-      return devices.map(d => ({
-        id: d.persistentID ? d.persistentID() : d.name(),
-        name: d.name(),
-        kind: d.kind ? d.kind() : undefined,
-        active: d.selected(),
-      }));
+    const raw = await jxaJson<{ id: string[]; name: string[]; kind: string[]; active: boolean[] }>(`
+      const devices = music.airplayDevices;
+      if (devices.length === 0) return { id: [], name: [], kind: [], active: [] };
+      return { id: devices.persistentID(), name: devices.name(), kind: devices.kind(), active: devices.selected() };
     `);
-    return raw.map((d) => ({ ...d, kind: normalizeDeviceKind(d.kind) }));
+    return raw.id.map((id, i) => ({
+      id,
+      name: raw.name[i],
+      kind: normalizeDeviceKind(raw.kind[i]),
+      active: raw.active[i],
+    }));
   }
+}
+
+function normalizeRepeat(raw: string): RepeatMode {
+  return raw === "one" || raw === "all" ? raw : "off";
 }

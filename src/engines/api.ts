@@ -1,115 +1,101 @@
 import type {
-  EngineCapabilities,
   MusicEngine,
   Track,
   Album,
   Artist,
   Playlist,
   PlaylistDetails,
-  PlaybackState,
   SearchResults,
   SearchType,
-  Device,
   CliConfig,
 } from "../lib/types";
-import { getMediaUserToken, loadConfig } from "../lib/config";
-import { buildIdentity, parseEntityRef, validateRawId } from "../lib/entities";
-import { AuthError, ExternalServiceError, UnsupportedOperationError } from "../lib/errors";
-
-const AMP_API_BASE = "https://amp-api.music.apple.com/v1";
-const WEBPLAYER_TOKEN_URL = "https://music.apple.com";
-const FETCH_TIMEOUT_MS = 15_000;
+import { loadConfig } from "../lib/config";
+import { buildIdentity, resolveRawId } from "../lib/entities";
+import { mapConcurrent } from "../lib/concurrency";
+import { AuthError, ExternalServiceError, isMusicError, MusicError, UnsupportedOperationError } from "../lib/errors";
+import { summarizePlaylistTracks } from "../lib/library-audit";
+import { cacheDeveloperToken, getCachedDeveloperToken, getMediaUserToken } from "../lib/secrets";
 
 /**
  * Apple Music web API engine.
  * Uses the media-user-token from browser cookies to authenticate against
- * Apple's internal amp-api.music.apple.com endpoints.
- *
- * This is the Apple Music equivalent of Spogo's cookie-based Spotify approach.
- * No official API key needed — just browser cookies.
+ * Apple's internal amp-api.music.apple.com endpoints, with the public
+ * developer token the Apple Music web player ships in its JavaScript.
  */
 
-// The Apple Music web player embeds a JWT developer token in its JS bundle.
-// We extract it once and cache it with a TTL.
-let cachedDevToken: string | null = null;
-let cachedDevTokenExpiry = 0;
-let cachedStorefront: string | null = null;
+const AMP_API_BASE = "https://amp-api.music.apple.com/v1";
+const WEB_PLAYER_URL = "https://music.apple.com/";
+const FETCH_TIMEOUT_MS = 15_000;
+const LIBRARY_PAGE_SIZE = 100; // Apple rejects larger library pages
+const PAGE_CONCURRENCY = 4;
+const MAX_PAGES = 1000;
 
-const DEV_TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
-const JWT_PATTERN = /eyJhbGciOi[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/;
+// ── Developer token ──
 
-function decodeBase64Url(value: string): string {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
-  return atob(padded);
+const WEB_PLAYER_TOKEN_ISSUER = "AMPWebPlay";
+const JWT_PATTERN = /eyJ[\w-]+\.eyJ[\w-]+\.[\w-]+/g;
+const TOKEN_EXPIRY_MARGIN_MS = 60_000;
+
+interface JwtClaims {
+  iss?: string;
+  exp?: number;
 }
 
-function isValidJwt(token: string): boolean {
-  const parts = token.split(".");
-  if (parts.length !== 3) return false;
+function decodeJwtClaims(token: string): JwtClaims | undefined {
+  const [header, payload] = token.split(".");
   try {
-    const header = JSON.parse(decodeBase64Url(parts[0]));
-    return typeof header.alg === "string" && typeof header.typ === "string";
+    const headerFields = recordOrEmpty(JSON.parse(Buffer.from(header, "base64url").toString()));
+    const claims = recordOrEmpty(JSON.parse(Buffer.from(payload, "base64url").toString()));
+    if (typeof headerFields.alg !== "string") return undefined;
+    return {
+      iss: typeof claims.iss === "string" ? claims.iss : undefined,
+      exp: typeof claims.exp === "number" ? claims.exp : undefined,
+    };
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function extractJwt(text: string): string | null {
-  const match = text.match(JWT_PATTERN);
-  if (!match) return null;
-  return isValidJwt(match[0]) ? match[0] : null;
+function isUnexpired(claims: JwtClaims, now: number): boolean {
+  return claims.exp === undefined || claims.exp * 1000 > now + TOKEN_EXPIRY_MARGIN_MS;
+}
+
+/** Find an unexpired developer token in web-player HTML or JavaScript, preferring the web player's own. */
+export function findDeveloperToken(text: string, now = Date.now()): string | undefined {
+  let fallback: string | undefined;
+  for (const [token] of text.matchAll(JWT_PATTERN)) {
+    const claims = decodeJwtClaims(token);
+    if (!claims || !isUnexpired(claims, now)) continue;
+    if (claims.iss === WEB_PLAYER_TOKEN_ISSUER) return token;
+    fallback ??= token;
+  }
+  return fallback;
 }
 
 async function fetchWithTimeout(url: string, label: string, init: RequestInit = {}): Promise<Response> {
   try {
-    return await fetch(url, {
-      ...init,
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   } catch (err) {
     throw new ExternalServiceError(`${label} failed.`, "Check your network connection and try again.", err);
   }
 }
 
-async function getWebPlayerDevToken(): Promise<string> {
-  if (cachedDevToken && Date.now() < cachedDevTokenExpiry) return cachedDevToken;
-
-  // Fetch the Apple Music web player and extract the embedded token
-  const res = await fetchWithTimeout(WEBPLAYER_TOKEN_URL, "Apple Music web player request");
+async function scrapeDeveloperToken(): Promise<string> {
+  const res = await fetchWithTimeout(WEB_PLAYER_URL, "Apple Music web player request");
   if (!res.ok) {
     throw new ExternalServiceError(`Apple Music web player error: ${res.status} ${res.statusText}`);
   }
   const html = await res.text();
+  const inline = findDeveloperToken(html);
+  if (inline) return inline;
 
-  // The token is embedded in the page's JS assets. Look for the JWT pattern.
-  // Apple embeds it as a constant in their webpack bundles.
-  const token = extractJwt(html);
-  if (token) {
-    cachedDevToken = token;
-    cachedDevTokenExpiry = Date.now() + DEV_TOKEN_TTL_MS;
-    return cachedDevToken;
-  }
-
-  // If not in the main HTML, try fetching JS assets
-  // Match both absolute (https://...) and relative (/assets/...) script src paths
-  const absoluteUrls = html.match(/https:\/\/[^"']+\.js/g) || [];
-  const relativeUrls = (html.match(/src="(\/[^"]+\.js)"/g) || []).map(
-    (m: string) => `https://music.apple.com${m.match(/src="([^"]+)"/)?.[1]}`,
-  );
-  const jsUrls = [...absoluteUrls, ...relativeUrls];
-  for (const url of jsUrls.slice(0, 10)) {
-    try {
-      const jsRes = await fetchWithTimeout(url, "Apple Music JavaScript bundle request");
-      if (!jsRes.ok) continue;
-      const js = await jsRes.text();
-      const jsToken = extractJwt(js);
-      if (jsToken) {
-        cachedDevToken = jsToken;
-        cachedDevTokenExpiry = Date.now() + DEV_TOKEN_TTL_MS;
-        return cachedDevToken;
-      }
-    } catch {}
+  // The token lives in the player's JavaScript bundles; check them in page order.
+  const scripts = [...html.matchAll(/(?:src|href)="([^"]+\.js)"/g)].map((m) => new URL(m[1], WEB_PLAYER_URL).href);
+  for (const url of scripts.slice(0, 10)) {
+    const script = await fetchWithTimeout(url, "Apple Music JavaScript bundle request").catch(() => undefined);
+    if (!script?.ok) continue;
+    const token = findDeveloperToken(await script.text());
+    if (token) return token;
   }
 
   throw new ExternalServiceError(
@@ -118,7 +104,52 @@ async function getWebPlayerDevToken(): Promise<string> {
   );
 }
 
-async function apiRequest<T>(path: string, params?: Record<string, string>): Promise<T> {
+interface DeveloperToken {
+  value: string;
+  fromCache: boolean;
+}
+
+async function scrapeAndCacheDeveloperToken(): Promise<DeveloperToken> {
+  const value = await scrapeDeveloperToken();
+  await cacheDeveloperToken(value);
+  return { value, fromCache: false };
+}
+
+async function loadDeveloperToken(): Promise<DeveloperToken> {
+  const cached = await getCachedDeveloperToken();
+  const claims = cached ? decodeJwtClaims(cached) : undefined;
+  if (cached && claims && isUnexpired(claims, Date.now())) return { value: cached, fromCache: true };
+  return scrapeAndCacheDeveloperToken();
+}
+
+// Scraping the web player downloads several megabytes, so the token is cached
+// in Keychain between runs and shared by every request in this one.
+let developerTokenRequest: Promise<DeveloperToken> | undefined;
+
+function getDeveloperToken(): Promise<DeveloperToken> {
+  developerTokenRequest ??= loadDeveloperToken();
+  return developerTokenRequest;
+}
+
+function refreshDeveloperToken(rejected: Promise<DeveloperToken>): Promise<DeveloperToken> {
+  // Concurrent requests rejected with the same token share one refresh.
+  if (developerTokenRequest === rejected) developerTokenRequest = scrapeAndCacheDeveloperToken();
+  return getDeveloperToken();
+}
+
+// ── HTTP ──
+
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = recordOrEmpty(await res.json());
+    const first = recordOrEmpty(Array.isArray(body.errors) ? body.errors[0] : undefined);
+    return str(first.detail) || str(first.title);
+  } catch {
+    return "";
+  }
+}
+
+async function apiRequest<T>(path: string, params: Record<string, string> = {}): Promise<T> {
   const mediaUserToken = await getMediaUserToken();
   if (!mediaUserToken) {
     throw new AuthError(
@@ -127,23 +158,28 @@ async function apiRequest<T>(path: string, params?: Record<string, string>): Pro
     );
   }
 
-  const devToken = await getWebPlayerDevToken();
   const url = new URL(`${AMP_API_BASE}${path}`);
-  if (params) {
-    for (const [k, v] of Object.entries(params)) {
-      url.searchParams.set(k, v);
-    }
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, v);
   }
+  const send = (developerToken: string) =>
+    fetchWithTimeout(url.href, "Apple Music API request", {
+      headers: {
+        Authorization: `Bearer ${developerToken}`,
+        "Media-User-Token": mediaUserToken,
+        Origin: "https://music.apple.com",
+        Referer: "https://music.apple.com/",
+        Accept: "application/json",
+      },
+    });
 
-  const res = await fetchWithTimeout(url.toString(), "Apple Music API request", {
-    headers: {
-      Authorization: `Bearer ${devToken}`,
-      "Media-User-Token": mediaUserToken,
-      Origin: "https://music.apple.com",
-      Referer: "https://music.apple.com/",
-      Accept: "application/json",
-    },
-  });
+  const tokenRequest = getDeveloperToken();
+  const developerToken = await tokenRequest;
+  let res = await send(developerToken.value);
+  if ((res.status === 401 || res.status === 403) && developerToken.fromCache) {
+    // Apple rotates the web player token; retry once with a freshly scraped one.
+    res = await send((await refreshDeveloperToken(tokenRequest)).value);
+  }
 
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
@@ -152,7 +188,10 @@ async function apiRequest<T>(path: string, params?: Record<string, string>): Pro
         "Re-import it with `setlist auth import --browser safari`.",
       );
     }
-    throw new ExternalServiceError(`Apple Music API error: ${res.status} ${res.statusText}`);
+    const detail = await errorDetail(res);
+    const message = `Apple Music API error: ${res.status} ${res.statusText}${detail ? ` (${detail})` : ""}`;
+    if (res.status === 404) throw new MusicError(message, { code: "not_found" });
+    throw new ExternalServiceError(message);
   }
 
   try {
@@ -168,18 +207,18 @@ interface AMResource {
   id: string;
   type: string;
   attributes?: Record<string, unknown>;
-  relationships?: Record<string, { data: AMResource[] }>;
 }
 
 interface AMResponse {
   results?: {
-    songs?: { data: AMResource[] };
-    albums?: { data: AMResource[] };
-    artists?: { data: AMResource[] };
-    playlists?: { data: AMResource[] };
+    songs?: { data?: AMResource[] };
+    albums?: { data?: AMResource[] };
+    artists?: { data?: AMResource[] };
+    playlists?: { data?: AMResource[] };
   };
   data?: AMResource[];
   next?: string;
+  meta?: { total?: number };
 }
 
 type ApiRequest = <T>(path: string, params?: Record<string, string>) => Promise<T>;
@@ -205,57 +244,58 @@ function num(val: unknown, fallback = 0): number {
   return typeof val === "number" && Number.isFinite(val) ? val : fallback;
 }
 
-function strArray(val: unknown): string[] {
-  return Array.isArray(val) ? val.filter((v): v is string => typeof v === "string") : [];
+function firstString(val: unknown): string | undefined {
+  return Array.isArray(val) ? val.find((v): v is string => typeof v === "string") : undefined;
 }
 
 function recordOrEmpty(val: unknown): Record<string, unknown> {
   return val && typeof val === "object" && !Array.isArray(val) ? (val as Record<string, unknown>) : {};
 }
 
+const CATALOG_TYPES = new Set(["songs", "albums", "artists", "playlists"]);
+
 function extractIds(r: AMResource): { catalogId?: string; libraryId?: string } {
-  const a = recordOrEmpty(r.attributes);
-  const playParams = recordOrEmpty(a.playParams);
+  const playParams = recordOrEmpty(recordOrEmpty(r.attributes).playParams);
+  // For library items playParams.id is the library ID, not a catalog ID.
   const catalogId =
     str(playParams.catalogId) ||
-    str(playParams.id) ||
+    (playParams.isLibrary ? "" : str(playParams.id)) ||
     str(playParams.globalId) ||
-    (r.type === "songs" || r.type === "albums" || r.type === "artists" || r.type === "playlists" ? r.id : undefined);
-  const libraryId = r.type.startsWith("library-") ? r.id : undefined;
-  return { catalogId: catalogId || undefined, libraryId };
+    (CATALOG_TYPES.has(r.type) ? r.id : "");
+  return { catalogId: catalogId || undefined, libraryId: r.type.startsWith("library-") ? r.id : undefined };
 }
 
-function resolveApiLibraryId(id: string, label: string): string {
-  const ref = parseEntityRef(id);
-  if (ref) {
-    if (ref.source !== "api" || ref.kind !== "library") {
-      throw new UnsupportedOperationError(
-        `${label} ${id} is not an Apple Music library ID`,
-        `Use \`setlist --engine api ... --json\` and pass the ${label.toLowerCase()}'s \`libraryId\` field.`,
-      );
-    }
-    return validateRawId(ref.value, label);
-  }
-  return validateRawId(id, label);
+function resolveApiLibraryId(id: string, label: "Playlist"): string {
+  return resolveRawId(id, {
+    source: "api",
+    kind: "library",
+    label,
+    description: "an Apple Music library ID",
+    hint: `Use \`setlist --engine api ... --json\` and pass the ${label.toLowerCase()}'s \`libraryId\` field.`,
+  });
 }
 
 function parseYear(releaseDate: unknown): number | undefined {
   if (typeof releaseDate !== "string" || releaseDate.length < 4) return undefined;
-  const year = parseInt(releaseDate.slice(0, 4), 10);
+  const year = Number.parseInt(releaseDate.slice(0, 4), 10);
   return Number.isFinite(year) && year > 0 ? year : undefined;
+}
+
+function formatArtwork(artwork: unknown): string | undefined {
+  const url = str(recordOrEmpty(artwork).url);
+  return url ? url.replace("{w}", "300").replace("{h}", "300") : undefined;
 }
 
 function parseApiTrack(r: AMResource): Track {
   const a = recordOrEmpty(r.attributes);
-  const { catalogId, libraryId } = extractIds(r);
   return {
-    ...buildIdentity({ source: "api", libraryId, catalogId }),
+    ...buildIdentity({ source: "api", ...extractIds(r) }),
     name: str(a.name, "Unknown"),
     artist: str(a.artistName, "Unknown"),
     album: str(a.albumName),
     duration: Math.round(num(a.durationInMillis) / 1000),
     trackNumber: num(a.trackNumber) || undefined,
-    genre: strArray(a.genreNames)[0] || undefined,
+    genre: firstString(a.genreNames),
     year: parseYear(a.releaseDate),
     artworkUrl: formatArtwork(a.artwork),
   };
@@ -263,69 +303,58 @@ function parseApiTrack(r: AMResource): Track {
 
 function parseApiAlbum(r: AMResource): Album {
   const a = recordOrEmpty(r.attributes);
-  const { catalogId, libraryId } = extractIds(r);
   return {
-    ...buildIdentity({ source: "api", libraryId, catalogId }),
+    ...buildIdentity({ source: "api", ...extractIds(r) }),
     name: str(a.name, "Unknown"),
     artist: str(a.artistName, "Unknown"),
-    trackCount: num(a.trackCount),
+    trackCount: typeof a.trackCount === "number" ? a.trackCount : undefined,
     year: parseYear(a.releaseDate),
-    genre: strArray(a.genreNames)[0] || undefined,
+    genre: firstString(a.genreNames),
     artworkUrl: formatArtwork(a.artwork),
   };
 }
 
 function parseApiArtist(r: AMResource): Artist {
   const a = recordOrEmpty(r.attributes);
-  const { catalogId, libraryId } = extractIds(r);
   return {
-    ...buildIdentity({ source: "api", libraryId, catalogId }),
+    ...buildIdentity({ source: "api", ...extractIds(r) }),
     name: str(a.name, "Unknown"),
-    genre: strArray(a.genreNames)[0] || undefined,
+    genre: firstString(a.genreNames),
     artworkUrl: formatArtwork(a.artwork),
   };
 }
 
 function parseApiPlaylist(r: AMResource): Playlist {
   const a = recordOrEmpty(r.attributes);
-  const { catalogId, libraryId } = extractIds(r);
-  const desc = recordOrEmpty(a.description);
   return {
-    ...buildIdentity({ source: "api", libraryId, catalogId }),
+    ...buildIdentity({ source: "api", ...extractIds(r) }),
     name: str(a.name, "Unknown"),
-    description: str(desc.short) || undefined,
-    trackCount: 0,
+    description: str(recordOrEmpty(a.description).short) || undefined,
+    artworkUrl: formatArtwork(a.artwork),
   };
 }
 
-function formatArtwork(artwork: unknown): string | undefined {
-  const obj = recordOrEmpty(artwork);
-  const url = str(obj.url);
-  if (!url) return undefined;
-  return url.replace("{w}", "300").replace("{h}", "300");
+function parseNextPage(next: string, limit: string): ApiPage {
+  const url = new URL(next, AMP_API_BASE);
+  const params = Object.fromEntries(url.searchParams.entries());
+  return {
+    path: url.pathname.startsWith("/v1/") ? url.pathname.slice(3) : url.pathname,
+    // Apple's next links drop `limit`, which would shrink later pages to 25 items.
+    params: { ...params, limit: params.limit ?? limit },
+  };
 }
 
-function parseNextPage(next: string): ApiPage {
-  const url = new URL(next, AMP_API_BASE);
-  const path = url.pathname.startsWith("/v1/") ? url.pathname.slice(3) : url.pathname;
-  return {
-    path,
-    params: Object.fromEntries(url.searchParams.entries()),
+function nativeOnly(feature: string): () => Promise<never> {
+  return async () => {
+    throw new UnsupportedOperationError(
+      `${feature} requires the native engine.`,
+      "Use `--engine native`, or `--engine auto` to combine Music.app control with API reads.",
+    );
   };
 }
 
 export class ApiEngine implements MusicEngine {
-  name = "api";
-  capabilities: EngineCapabilities = {
-    playback: false,
-    queue: false,
-    playlistMutation: false,
-    devices: false,
-    catalogSearch: true,
-    libraryRead: true,
-    shuffle: false,
-    repeat: false,
-  };
+  private storefront?: Promise<string>;
 
   constructor(private deps: ApiEngineDeps = {}) {}
 
@@ -333,120 +362,73 @@ export class ApiEngine implements MusicEngine {
     return (this.deps.request ?? apiRequest)<T>(path, params);
   }
 
-  private loadRuntimeConfig(): Promise<CliConfig> {
-    return (this.deps.configLoader ?? loadConfig)();
+  private getStorefront(): Promise<string> {
+    this.storefront ??= (async () => {
+      const config = await (this.deps.configLoader ?? loadConfig)();
+      if (config.storefront !== "auto") return config.storefront;
+      const data = await this.request<AMResponse>("/me/storefront");
+      return data.data?.[0]?.id || "us";
+    })();
+    return this.storefront;
   }
 
-  private async getStorefront(): Promise<string> {
-    if (cachedStorefront) return cachedStorefront;
-    const config = await this.loadRuntimeConfig();
-    if (config.storefront && config.storefront !== "auto") {
-      cachedStorefront = config.storefront;
-      return cachedStorefront;
+  /**
+   * Read a library collection up to `maxItems`. Apple serves library pages slowly
+   * (1–2s each), so once the first page reports a total the rest load in parallel.
+   */
+  private async requestPages(path: string, params: Record<string, string>, maxItems = Infinity): Promise<AMResource[]> {
+    const limit = Math.min(maxItems, LIBRARY_PAGE_SIZE);
+    const first = await this.request<AMResponse>(path, { ...params, limit: String(limit) });
+    const resources = [...(first.data ?? [])];
+    const total = first.meta?.total;
+
+    if (typeof total === "number") {
+      const start = Number(params.offset ?? 0);
+      const offsets: number[] = [];
+      for (let offset = start + limit; offset < Math.min(total, start + maxItems); offset += limit)
+        offsets.push(offset);
+      const pages = await mapConcurrent(offsets, PAGE_CONCURRENCY, (offset) =>
+        this.request<AMResponse>(path, { ...params, offset: String(offset), limit: String(limit) }),
+      );
+      for (const page of pages) resources.push(...(page.data ?? []));
+      return resources.slice(0, maxItems);
     }
 
-    const data = await this.request<AMResponse>("/me/storefront");
-    const storefront = data.data?.[0]?.id;
-    cachedStorefront = storefront || "us";
-    return cachedStorefront;
-  }
-
-  private async requestAllData(
-    path: string,
-    params: Record<string, string>,
-    maxItems = Infinity,
-  ): Promise<AMResource[]> {
-    const resources: AMResource[] = [];
-    let page: ApiPage | null = { path, params };
-    let pageCount = 0;
-
-    while (page && resources.length < maxItems) {
-      pageCount++;
-      if (pageCount > 1000) {
+    // No total reported: follow Apple's next links one page at a time.
+    let next = first.next;
+    for (let pageCount = 1; next && resources.length < maxItems; pageCount++) {
+      if (pageCount >= MAX_PAGES) {
         throw new ExternalServiceError(
-          "Apple Music API pagination exceeded 1000 pages.",
+          `Apple Music API pagination exceeded ${MAX_PAGES} pages.`,
           "The API returned too many continuation links; try a lower limit.",
         );
       }
-
-      const data: AMResponse = await this.request<AMResponse>(page.path, page.params);
-      resources.push(...(data.data || []));
-      page = data.next ? parseNextPage(data.next) : null;
+      const page = parseNextPage(next, String(limit));
+      const data = await this.request<AMResponse>(page.path, page.params);
+      resources.push(...(data.data ?? []));
+      next = data.next;
     }
-
     return resources.slice(0, maxItems);
   }
 
-  // ── Playback (not supported via API — delegate to native) ──
-  // The Apple Music API is a catalog/library API, not a playback control API.
-  // Playback must go through Music.app (native engine).
+  // ── Playback: the Apple Music API has no playback control ──
 
-  async play(_query?: string): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playback control requires the native engine.",
-      "Use `setlist --engine native play`.",
-    );
-  }
-
-  async pause(): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playback control requires the native engine.",
-      "Use `setlist --engine native pause`.",
-    );
-  }
-
-  async resume(): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playback control requires the native engine.",
-      "Use `setlist --engine native resume`.",
-    );
-  }
-
-  async next(): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playback control requires the native engine.",
-      "Use `setlist --engine native next`.",
-    );
-  }
-
-  async previous(): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playback control requires the native engine.",
-      "Use `setlist --engine native prev`.",
-    );
-  }
-
-  async seek(_seconds: number): Promise<void> {
-    throw new UnsupportedOperationError("Playback control requires the native engine.");
-  }
-
-  async setVolume(_level: number): Promise<void> {
-    throw new UnsupportedOperationError("Volume control requires the native engine.");
-  }
-
-  async getVolume(): Promise<number> {
-    throw new UnsupportedOperationError("Volume requires the native engine.");
-  }
-
-  async setShuffle(_enabled: boolean): Promise<void> {
-    throw new UnsupportedOperationError("Shuffle requires the native engine.");
-  }
-
-  async getShuffle(): Promise<boolean> {
-    throw new UnsupportedOperationError("Shuffle requires the native engine.");
-  }
-
-  async setRepeat(_mode: "off" | "one" | "all"): Promise<void> {
-    throw new UnsupportedOperationError("Repeat mode requires the native engine.");
-  }
-
-  async getRepeat(): Promise<"off" | "one" | "all"> {
-    throw new UnsupportedOperationError("Repeat mode requires the native engine.");
-  }
-
-  async getStatus(): Promise<PlaybackState> {
-    throw new UnsupportedOperationError("Playback status requires the native engine.");
-  }
+  play = nativeOnly("Playback control");
+  pause = nativeOnly("Playback control");
+  resume = nativeOnly("Playback control");
+  next = nativeOnly("Playback control");
+  previous = nativeOnly("Playback control");
+  seek = nativeOnly("Playback control");
+  setVolume = nativeOnly("Volume control");
+  getVolume = nativeOnly("Volume control");
+  setShuffle = nativeOnly("Shuffle");
+  getShuffle = nativeOnly("Shuffle");
+  setRepeat = nativeOnly("Repeat mode");
+  getRepeat = nativeOnly("Repeat mode");
+  getStatus = nativeOnly("Playback status");
+  getDevices = nativeOnly("Device listing");
+  addToPlaylist = nativeOnly("Playlist editing");
+  removeFromPlaylist = nativeOnly("Playlist editing");
 
   // ── Search (catalog) ──
 
@@ -458,141 +440,62 @@ export class ApiEngine implements MusicEngine {
       playlist: "playlists",
     };
 
-    const amTypes = (types.length > 0 ? types : (["track", "album", "artist"] as SearchType[]))
-      .map((t) => typeMap[t])
-      .join(",");
-
     const storefront = await this.getStorefront();
-    const data = await this.request<AMResponse>(`/catalog/${storefront}/search`, {
+    const { results } = await this.request<AMResponse>(`/catalog/${storefront}/search`, {
       term: query,
-      types: amTypes,
+      types: types.map((t) => typeMap[t]).join(","),
       limit: String(limit),
     });
 
-    const results: SearchResults = { tracks: [], albums: [], artists: [], playlists: [] };
-
-    if (data.results?.songs?.data) {
-      results.tracks = data.results.songs.data.map(parseApiTrack);
-    }
-    if (data.results?.albums?.data) {
-      results.albums = data.results.albums.data.map(parseApiAlbum);
-    }
-    if (data.results?.artists?.data) {
-      results.artists = data.results.artists.data.map(parseApiArtist);
-    }
-    if (data.results?.playlists?.data) {
-      results.playlists = data.results.playlists.data.map(parseApiPlaylist);
-    }
-
-    return results;
-  }
-
-  // ── Queue (not supported via API) ──
-
-  async addToQueue(_trackId: string): Promise<void> {
-    throw new UnsupportedOperationError("Queue management requires the native engine.");
+    return {
+      tracks: results?.songs?.data?.map(parseApiTrack) ?? [],
+      albums: results?.albums?.data?.map(parseApiAlbum) ?? [],
+      artists: results?.artists?.data?.map(parseApiArtist) ?? [],
+      playlists: results?.playlists?.data?.map(parseApiPlaylist) ?? [],
+    };
   }
 
   // ── Library ──
 
   async getPlaylists(): Promise<Playlist[]> {
-    const data = await this.requestAllData("/me/library/playlists", {
-      limit: "100",
-    });
-    return data.map(parseApiPlaylist);
+    return (await this.requestPages("/me/library/playlists", {})).map(parseApiPlaylist);
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
-    const apiPlaylistId = resolveApiLibraryId(playlistId, "Playlist");
-    const data = await this.requestAllData(`/me/library/playlists/${encodeURIComponent(apiPlaylistId)}/tracks`, {
-      limit: "100",
-    });
-    return data.map(parseApiTrack);
+    const id = resolveApiLibraryId(playlistId, "Playlist");
+    try {
+      return (await this.requestPages(`/me/library/playlists/${encodeURIComponent(id)}/tracks`, {})).map(parseApiTrack);
+    } catch (err) {
+      // Apple answers 404 for the tracks of an empty playlist.
+      if (isMusicError(err) && err.code === "not_found") return [];
+      throw err;
+    }
   }
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
-    const apiPlaylistId = resolveApiLibraryId(playlistId, "Playlist");
-    const data = await this.request<AMResponse>(`/me/library/playlists/${encodeURIComponent(apiPlaylistId)}`, {});
+    const id = resolveApiLibraryId(playlistId, "Playlist");
+    const [data, tracks] = await Promise.all([
+      this.request<AMResponse>(`/me/library/playlists/${encodeURIComponent(id)}`),
+      this.getPlaylistTracks(id),
+    ]);
     const playlist = data.data?.[0];
     if (!playlist) {
-      throw new ExternalServiceError(`Apple Music playlist not found: ${apiPlaylistId}`);
-    }
-    const a = recordOrEmpty(playlist?.attributes);
-    const tracks = await this.getPlaylistTracks(apiPlaylistId);
-    const playParams = recordOrEmpty(a.playParams);
-    const desc = recordOrEmpty(a.description);
-
-    const artistCounts = new Map<string, number>();
-    const genreCounts = new Map<string, number>();
-    for (const t of tracks) {
-      artistCounts.set(t.artist, (artistCounts.get(t.artist) || 0) + 1);
-      genreCounts.set(t.genre || "Unknown", (genreCounts.get(t.genre || "Unknown") || 0) + 1);
+      throw new ExternalServiceError(`Apple Music playlist not found: ${id}`);
     }
 
     return {
-      ...buildIdentity({
-        source: "api",
-        libraryId: apiPlaylistId,
-        catalogId: str(playParams.catalogId) || str(playParams.globalId) || undefined,
-      }),
-      name: str(a.name, "Unknown"),
-      description: str(desc.short) || undefined,
+      ...parseApiPlaylist(playlist),
       trackCount: tracks.length,
-      totalDuration: tracks.reduce((sum, t) => sum + t.duration, 0),
-      artworkUrl: formatArtwork(a.artwork),
       tracks,
-      topArtists: Array.from(artistCounts.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 15)
-        .map(([name, count]) => ({ name, count })),
-      genres: Array.from(genreCounts.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10)
-        .map(([name, count]) => ({ name, count })),
+      ...summarizePlaylistTracks(tracks),
     };
   }
 
-  async addToPlaylist(_playlistId: string, _trackIds: string[]): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playlist editing via API is not implemented.",
-      "Use `--engine native` with native persistent IDs.",
-    );
-  }
-
-  async removeFromPlaylist(_playlistId: string, _trackIds: string[]): Promise<void> {
-    throw new UnsupportedOperationError(
-      "Playlist editing via API is not implemented.",
-      "Use `--engine native` with native persistent IDs.",
-    );
-  }
-
   async getLibraryTracks(limit = 50, offset = 0): Promise<Track[]> {
-    const data = await this.requestAllData(
-      "/me/library/songs",
-      {
-        limit: String(limit),
-        offset: String(offset),
-      },
-      limit,
-    );
-    return data.map(parseApiTrack);
+    return (await this.requestPages("/me/library/songs", { offset: String(offset) }, limit)).map(parseApiTrack);
   }
 
   async getLibraryAlbums(limit = 50, offset = 0): Promise<Album[]> {
-    const data = await this.requestAllData(
-      "/me/library/albums",
-      {
-        limit: String(limit),
-        offset: String(offset),
-      },
-      limit,
-    );
-    return data.map(parseApiAlbum);
-  }
-
-  // ── Devices (not available via API) ──
-
-  async getDevices(): Promise<Device[]> {
-    throw new UnsupportedOperationError("Device listing requires the native engine.");
+    return (await this.requestPages("/me/library/albums", { offset: String(offset) }, limit)).map(parseApiAlbum);
   }
 }

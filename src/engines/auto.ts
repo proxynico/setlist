@@ -1,5 +1,4 @@
 import type {
-  EngineCapabilities,
   MusicEngine,
   Track,
   Album,
@@ -7,30 +6,21 @@ import type {
   PlaylistDetails,
   SearchResults,
   SearchType,
+  RepeatMode,
 } from "../lib/types";
 import { NativeEngine } from "./native";
 import { ApiEngine } from "./api";
-import { getMediaUserToken } from "../lib/config";
+import { parseEntityRef } from "../lib/entities";
+import { getMediaUserToken } from "../lib/secrets";
 
 /**
  * Auto engine — uses native for playback, API for catalog/library when available.
  * If no API auth is configured, everything routes through native.
+ * Source-qualified IDs (`native:…`, `api:…`) always go to the engine that issued them.
  * If API auth exists but a request fails, the error propagates — no silent fallback.
  */
 export class AutoEngine implements MusicEngine {
-  name = "auto";
-  capabilities: EngineCapabilities = {
-    playback: true,
-    queue: false,
-    playlistMutation: true,
-    devices: true,
-    catalogSearch: true,
-    libraryRead: true,
-    shuffle: true,
-    repeat: true,
-  };
-
-  private apiAvailable: boolean | null = null;
+  private apiAvailable?: Promise<boolean>;
 
   constructor(
     private native: MusicEngine = new NativeEngine(),
@@ -38,11 +28,12 @@ export class AutoEngine implements MusicEngine {
     private tokenLoader: () => Promise<string | undefined> = getMediaUserToken,
   ) {}
 
-  private async hasApi(): Promise<boolean> {
-    if (this.apiAvailable !== null) return this.apiAvailable;
-    const token = await this.tokenLoader();
-    this.apiAvailable = !!token;
-    return this.apiAvailable;
+  /** The engine for library reads: the one an ID names, else API when authenticated. */
+  private async reader(id?: string): Promise<MusicEngine> {
+    const source = id ? parseEntityRef(id)?.source : undefined;
+    if (source) return source === "api" ? this.api : this.native;
+    this.apiAvailable ??= this.tokenLoader().then(Boolean);
+    return (await this.apiAvailable) ? this.api : this.native;
   }
 
   // Playback always goes through native
@@ -76,7 +67,7 @@ export class AutoEngine implements MusicEngine {
   getShuffle() {
     return this.native.getShuffle();
   }
-  setRepeat(mode: "off" | "one" | "all") {
+  setRepeat(mode: RepeatMode) {
     return this.native.setRepeat(mode);
   }
   getRepeat() {
@@ -88,9 +79,6 @@ export class AutoEngine implements MusicEngine {
   getDevices() {
     return this.native.getDevices();
   }
-  addToQueue(trackId: string) {
-    return this.native.addToQueue(trackId);
-  }
   addToPlaylist(playlistId: string, trackIds: string[]) {
     return this.native.addToPlaylist(playlistId, trackIds);
   }
@@ -98,37 +86,29 @@ export class AutoEngine implements MusicEngine {
     return this.native.removeFromPlaylist(playlistId, trackIds);
   }
 
-  // Search: use API for catalog search when authenticated, otherwise use native library search.
+  // Search: API catalog search when authenticated, otherwise native library search.
   async search(query: string, types: SearchType[], limit?: number): Promise<SearchResults> {
-    if (await this.hasApi()) {
-      return this.api.search(query, types, limit);
-    }
-    return this.native.search(query, types, limit);
+    return (await this.reader()).search(query, types, limit);
   }
 
   // Library: prefer API when authenticated for richer metadata; otherwise use native.
   async getPlaylists(): Promise<Playlist[]> {
-    if (await this.hasApi()) return this.api.getPlaylists();
-    return this.native.getPlaylists();
+    return (await this.reader()).getPlaylists();
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
-    if (await this.hasApi()) return this.api.getPlaylistTracks(playlistId);
-    return this.native.getPlaylistTracks(playlistId);
+    return (await this.reader(playlistId)).getPlaylistTracks(playlistId);
   }
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
-    if (await this.hasApi()) return this.api.getPlaylistInfo(playlistId);
-    return this.native.getPlaylistInfo(playlistId);
+    return (await this.reader(playlistId)).getPlaylistInfo(playlistId);
   }
 
   async getLibraryTracks(limit?: number, offset?: number): Promise<Track[]> {
-    if (await this.hasApi()) return this.api.getLibraryTracks(limit, offset);
-    return this.native.getLibraryTracks(limit, offset);
+    return (await this.reader()).getLibraryTracks(limit, offset);
   }
 
   async getLibraryAlbums(limit?: number, offset?: number): Promise<Album[]> {
-    if (await this.hasApi()) return this.api.getLibraryAlbums(limit, offset);
-    return this.native.getLibraryAlbums(limit, offset);
+    return (await this.reader()).getLibraryAlbums(limit, offset);
   }
 }

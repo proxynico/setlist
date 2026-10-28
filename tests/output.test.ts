@@ -1,11 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  getOutputMode,
-  outputErrorDetails,
-  outputPlainTrack,
-  setColorEnabled,
-  setVerboseEnabled,
-} from "../src/lib/output";
+import { getOutputMode, outputErrorDetails, outputTracks, setColorEnabled, setVerboseEnabled } from "../src/lib/output";
 import { ExternalServiceError } from "../src/lib/errors";
 
 function captureErrors(run: () => void): string[] {
@@ -49,15 +43,20 @@ describe("plain output", () => {
     };
 
     try {
-      outputPlainTrack({
-        id: "native:persistent:ABC123",
-        source: "native",
-        persistentId: "ABC123",
-        name: "one\ttwo",
-        artist: "line\nbreak",
-        album: "carriage\rreturn",
-        duration: 61,
-      });
+      outputTracks(
+        [
+          {
+            id: "native:persistent:ABC123",
+            source: "native",
+            persistentId: "ABC123",
+            name: "one\ttwo",
+            artist: "line\nbreak",
+            album: "carriage\rreturn",
+            duration: 61,
+          },
+        ],
+        "plain",
+      );
     } finally {
       console.log = originalLog;
     }

@@ -7,9 +7,6 @@ export function registerDeviceCommands(program: Command, getEngine: () => MusicE
     .command("devices")
     .description("List AirPlay devices")
     .action(async () => {
-      const engine = getEngine();
-      const devices = await engine.getDevices();
-      const mode = getOutputMode(program.opts());
-      outputDevices(devices, mode);
+      outputDevices(await getEngine().getDevices(), getOutputMode(program.opts()));
     });
 }

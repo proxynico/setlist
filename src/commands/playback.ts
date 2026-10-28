@@ -1,191 +1,101 @@
-import type { Command } from "commander";
-import type { MusicEngine } from "../lib/types";
-import { ValidationError } from "../lib/errors";
+import { Argument, type Command } from "commander";
+import type { MusicEngine, RepeatMode } from "../lib/types";
 import { parseInteger } from "../lib/input";
-import { getOutputMode, outputStatus, outputMessage, outputJson, outputKeyValue } from "../lib/output";
+import { formatDuration, getOutputMode, outputAction, outputStatus, outputValue } from "../lib/output";
 
 export function registerPlaybackCommands(program: Command, getEngine: () => MusicEngine) {
+  const mode = () => getOutputMode(program.opts());
+
   program
     .command("play [query]")
-    .description("Play a track, or resume playback")
+    .description("Play the first library track matching a query, or resume playback")
     .action(async (query?: string) => {
-      const engine = getEngine();
-      await engine.play(query);
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "play", query: query || null });
-      } else if (mode !== "plain") {
-        outputMessage(query ? `Playing: ${query}` : "Resumed playback");
-      }
+      await getEngine().play(query);
+      outputAction(mode(), { action: "play", query: query || null }, query ? `Playing: ${query}` : "Resumed playback");
     });
 
   program
     .command("pause")
     .description("Pause playback")
     .action(async () => {
-      const engine = getEngine();
-      await engine.pause();
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "pause" });
-      } else if (mode !== "plain") {
-        outputMessage("Paused");
-      }
+      await getEngine().pause();
+      outputAction(mode(), { action: "pause" }, "Paused");
     });
 
   program
     .command("resume")
     .description("Resume playback")
     .action(async () => {
-      const engine = getEngine();
-      await engine.resume();
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "resume" });
-      } else if (mode !== "plain") {
-        outputMessage("Resumed");
-      }
+      await getEngine().resume();
+      outputAction(mode(), { action: "resume" }, "Resumed");
     });
 
   program
     .command("next")
     .description("Skip to next track")
     .action(async () => {
-      const engine = getEngine();
-      await engine.next();
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "next" });
-      } else if (mode !== "plain") {
-        outputMessage("Skipped to next track");
-      }
+      await getEngine().next();
+      outputAction(mode(), { action: "next" }, "Skipped to next track");
     });
 
   program
     .command("prev")
     .description("Go to previous track")
     .action(async () => {
-      const engine = getEngine();
-      await engine.previous();
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "previous" });
-      } else if (mode !== "plain") {
-        outputMessage("Previous track");
-      }
+      await getEngine().previous();
+      outputAction(mode(), { action: "previous" }, "Previous track");
     });
 
   program
     .command("seek <seconds>")
     .description("Seek to position in seconds")
     .action(async (seconds: string) => {
-      const engine = getEngine();
-      const secs = parseInteger("seek position", seconds, { min: 0 });
-      await engine.seek(secs);
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
-        outputJson({ action: "seek", position: secs });
-      } else if (mode !== "plain") {
-        outputMessage(`Seeked to ${Math.floor(secs / 60)}:${(secs % 60).toString().padStart(2, "0")}`);
-      }
+      const position = parseInteger("seek position", seconds, { min: 0 });
+      await getEngine().seek(position);
+      outputAction(mode(), { action: "seek", position }, `Seeked to ${formatDuration(position)}`);
     });
 
   program
     .command("status")
     .description("Show current playback status")
     .action(async () => {
-      const engine = getEngine();
-      const status = await engine.getStatus();
-      const mode = getOutputMode(program.opts());
-      outputStatus(status, mode);
+      outputStatus(await getEngine().getStatus(), mode());
     });
 
   program
     .command("volume [level]")
     .description("Get or set volume (0-100)")
     .action(async (level?: string) => {
-      const engine = getEngine();
-      const mode = getOutputMode(program.opts());
-
       if (level === undefined) {
-        const vol = await engine.getVolume();
-        if (mode === "json") {
-          outputJson({ volume: vol });
-        } else if (mode === "plain") {
-          console.log(vol);
-        } else {
-          outputKeyValue("Volume", String(vol));
-        }
-      } else {
-        const vol = parseInteger("volume", level, { min: 0, max: 100 });
-        await engine.setVolume(vol);
-        if (mode === "json") {
-          outputJson({ action: "volume", volume: vol });
-        } else if (mode !== "plain") {
-          outputMessage(`Volume set to ${vol}`);
-        }
+        outputValue(mode(), "volume", await getEngine().getVolume(), "Volume");
+        return;
       }
+      const volume = parseInteger("volume", level, { min: 0, max: 100 });
+      await getEngine().setVolume(volume);
+      outputAction(mode(), { action: "volume", volume }, `Volume set to ${volume}`);
     });
 
   program
-    .command("shuffle [on|off]")
+    .command("shuffle")
     .description("Toggle or set shuffle mode")
-    .action(async (value?: string) => {
+    .addArgument(new Argument("[state]", "on or off; toggles when omitted").choices(["on", "off"]))
+    .action(async (state?: "on" | "off") => {
       const engine = getEngine();
-      const mode = getOutputMode(program.opts());
-      if (value !== undefined && value !== "on" && value !== "off") {
-        throw new ValidationError("shuffle must be one of: on, off");
-      }
-
-      const current = await engine.getShuffle();
-      if (value === "on" || value === "off") {
-        const enabled = value === "on";
-        await engine.setShuffle(enabled);
-        if (mode === "json") {
-          outputJson({ shuffle: enabled });
-        } else if (mode !== "plain") {
-          outputMessage(`Shuffle ${enabled ? "on" : "off"}`);
-        }
-        return;
-      }
-
-      const newState = !current;
-      await engine.setShuffle(newState);
-      if (mode === "json") {
-        outputJson({ shuffle: newState });
-      } else if (mode !== "plain") {
-        outputMessage(`Shuffle ${newState ? "on" : "off"}`);
-      }
+      const enabled = state === undefined ? !(await engine.getShuffle()) : state === "on";
+      await engine.setShuffle(enabled);
+      outputAction(mode(), { shuffle: enabled }, `Shuffle ${enabled ? "on" : "off"}`);
     });
 
   program
-    .command("repeat [off|one|all]")
-    .description("Set repeat mode")
-    .action(async (value?: string) => {
-      const engine = getEngine();
-      const mode = getOutputMode(program.opts());
-      const repeatValues = new Set(["off", "one", "all"]);
-
-      if (value) {
-        if (!repeatValues.has(value)) {
-          throw new ValidationError("repeat mode must be one of: off, one, all");
-        }
-        await engine.setRepeat(value as "off" | "one" | "all");
-        if (mode === "json") {
-          outputJson({ repeat: value });
-        } else if (mode !== "plain") {
-          outputMessage(`Repeat: ${value}`);
-        }
+    .command("repeat")
+    .description("Get or set repeat mode")
+    .addArgument(new Argument("[mode]", "off, one, or all").choices(["off", "one", "all"]))
+    .action(async (repeat?: RepeatMode) => {
+      if (repeat === undefined) {
+        outputValue(mode(), "repeat", await getEngine().getRepeat(), "Repeat");
         return;
       }
-
-      const repeatMode = await engine.getRepeat();
-      if (mode === "json") {
-        outputJson({ repeat: repeatMode });
-      } else if (mode === "plain") {
-        console.log(repeatMode);
-      } else {
-        outputKeyValue("Repeat", repeatMode);
-      }
+      await getEngine().setRepeat(repeat);
+      outputAction(mode(), { repeat }, `Repeat: ${repeat}`);
     });
 }

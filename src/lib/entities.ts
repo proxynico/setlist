@@ -1,8 +1,7 @@
 import type { EntityIdentity, EntitySource } from "./types";
-import { ValidationError } from "./errors";
+import { UnsupportedOperationError, ValidationError } from "./errors";
 
 interface IdentityInput {
-  id?: string;
   source: EntitySource;
   persistentId?: string;
   libraryId?: string;
@@ -12,11 +11,10 @@ interface IdentityInput {
 
 export function buildIdentity(input: IdentityInput): EntityIdentity {
   const id =
-    input.id ??
-    (input.persistentId ? createEntityRef(input.source, "persistent", input.persistentId) : undefined) ??
-    (input.libraryId ? createEntityRef(input.source, "library", input.libraryId) : undefined) ??
-    (input.catalogId ? createEntityRef(input.source, "catalog", input.catalogId) : undefined) ??
-    (input.derivedId ? createEntityRef(input.source, "derived", input.derivedId) : undefined);
+    (input.persistentId && createEntityRef(input.source, "persistent", input.persistentId)) ||
+    (input.libraryId && createEntityRef(input.source, "library", input.libraryId)) ||
+    (input.catalogId && createEntityRef(input.source, "catalog", input.catalogId)) ||
+    (input.derivedId && createEntityRef(input.source, "derived", input.derivedId));
   if (!id) {
     throw new Error("Entity identity requires at least one ID");
   }
@@ -30,10 +28,6 @@ export function buildIdentity(input: IdentityInput): EntityIdentity {
   };
 }
 
-export function hasNativePersistentId(entity: EntityIdentity): entity is EntityIdentity & { persistentId: string } {
-  return typeof entity.persistentId === "string" && entity.persistentId.length > 0;
-}
-
 export type EntityRefKind = "persistent" | "library" | "catalog" | "derived";
 
 export interface EntityRef {
@@ -42,7 +36,7 @@ export interface EntityRef {
   value: string;
 }
 
-export function createEntityRef(source: EntitySource, kind: EntityRefKind, value: string): string {
+function createEntityRef(source: EntitySource, kind: EntityRefKind, value: string): string {
   return `${source}:${kind}:${value}`;
 }
 
@@ -71,4 +65,21 @@ export function validateRawId(id: string, label: string): string {
     );
   }
   return id;
+}
+
+interface ExpectedRef {
+  source: EntitySource;
+  kind: EntityRefKind;
+  label: string; // "Track", "Playlist"
+  description: string; // "a native persistent ID"
+  hint: string;
+}
+
+/** Accept a raw ID or a source-qualified ref of the expected kind, and return the safe raw value. */
+export function resolveRawId(id: string, expected: ExpectedRef): string {
+  const ref = parseEntityRef(id);
+  if (ref && (ref.source !== expected.source || ref.kind !== expected.kind)) {
+    throw new UnsupportedOperationError(`${expected.label} ${id} is not ${expected.description}`, expected.hint);
+  }
+  return validateRawId(ref?.value ?? id, expected.label);
 }

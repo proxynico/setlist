@@ -9,6 +9,7 @@ import type {
   PlaybackState,
   Device,
   SearchResults,
+  CountedValue,
 } from "./types";
 import { isMusicError, ValidationError } from "./errors";
 
@@ -22,7 +23,7 @@ const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
 const MAGENTA = "\x1b[35m";
 
-let colorEnabled = true;
+let colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR && process.env.TERM !== "dumb";
 let verboseEnabled = false;
 
 export function setColorEnabled(enabled: boolean) {
@@ -38,10 +39,14 @@ function c(code: string, text: string): string {
   return `${code}${text}${RESET}`;
 }
 
-function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function tsv(value: unknown): string {
@@ -52,98 +57,10 @@ function tsv(value: unknown): string {
     .replaceAll("\r", "\\r");
 }
 
-// ── JSON output ──
-
-export function outputJson(data: unknown) {
-  console.log(JSON.stringify(data, null, 2));
+/** Print one tab-separated row; every cell is escaped. */
+function row(...cells: unknown[]) {
+  console.log(cells.map(tsv).join("\t"));
 }
-
-// ── Plain output (tab-separated, scriptable) ──
-
-export function outputPlainTrack(t: Track) {
-  console.log(
-    `track\t${tsv(t.id)}\t${tsv(t.name)}\t${tsv(t.artist)}\t${tsv(t.album)}\t${formatDuration(t.duration)}\t${tsv(t.source)}`,
-  );
-}
-
-export function outputPlainAlbum(a: Album) {
-  console.log(
-    `album\t${tsv(a.id)}\t${tsv(a.name)}\t${tsv(a.artist)}\t${a.trackCount}\t${a.year ?? ""}\t${tsv(a.source)}`,
-  );
-}
-
-export function outputPlainArtist(a: Artist) {
-  console.log(`artist\t${tsv(a.id)}\t${tsv(a.name)}\t${tsv(a.genre)}\t${tsv(a.source)}`);
-}
-
-export function outputPlainPlaylist(p: Playlist) {
-  console.log(`playlist\t${tsv(p.id)}\t${tsv(p.name)}\t${p.trackCount}\t${tsv(p.source)}`);
-}
-
-export function outputPlainStatus(s: PlaybackState) {
-  if (!s.track) {
-    console.log(`stopped\t0\t0\t${s.volume}`);
-    return;
-  }
-  console.log(
-    `${tsv(s.state)}\t${tsv(s.track.name)}\t${tsv(s.track.artist)}\t${formatDuration(s.position)}/${formatDuration(s.track.duration)}\t${s.volume}`,
-  );
-}
-
-// ── Human output (colorized) ──
-
-export function outputHumanTrack(t: Track, index?: number) {
-  const prefix = index !== undefined ? `${c(DIM, `${(index + 1).toString().padStart(3)}.`)} ` : "";
-  const duration = c(DIM, formatDuration(t.duration));
-  console.log(
-    `${prefix}${c(BOLD + WHITE, t.name)} ${c(DIM, "--")} ${c(CYAN, t.artist)} ${c(DIM, "/")} ${c(DIM, t.album)} ${duration}`,
-  );
-}
-
-export function outputHumanAlbum(a: Album, index?: number) {
-  const prefix = index !== undefined ? `${c(DIM, `${(index + 1).toString().padStart(3)}.`)} ` : "";
-  const year = a.year ? c(DIM, `(${a.year})`) : "";
-  console.log(
-    `${prefix}${c(BOLD + WHITE, a.name)} ${c(DIM, "--")} ${c(CYAN, a.artist)} ${year} ${c(DIM, `${a.trackCount} tracks`)}`,
-  );
-}
-
-export function outputHumanArtist(a: Artist, index?: number) {
-  const prefix = index !== undefined ? `${c(DIM, `${(index + 1).toString().padStart(3)}.`)} ` : "";
-  const genre = a.genre ? c(DIM, `(${a.genre})`) : "";
-  console.log(`${prefix}${c(BOLD + WHITE, a.name)} ${genre}`);
-}
-
-export function outputHumanPlaylist(p: Playlist, index?: number) {
-  const prefix = index !== undefined ? `${c(DIM, `${(index + 1).toString().padStart(3)}.`)} ` : "";
-  console.log(`${prefix}${c(BOLD + WHITE, p.name)} ${c(DIM, `${p.trackCount} tracks`)}`);
-}
-
-export function outputHumanStatus(s: PlaybackState) {
-  if (!s.track) {
-    console.log(c(DIM, "Not playing"));
-    return;
-  }
-
-  const stateIcon = s.state === "playing" ? c(GREEN, "playing") : c(YELLOW, "paused");
-  const progress = `${formatDuration(s.position)} / ${formatDuration(s.track.duration)}`;
-  const shuffle = s.shuffleEnabled ? c(MAGENTA, " [shuffle]") : "";
-  const repeat = s.repeatMode !== "off" ? c(MAGENTA, ` [repeat ${s.repeatMode}]`) : "";
-
-  console.log(`${stateIcon} ${c(DIM, "--")} ${c(DIM, progress)}${shuffle}${repeat}`);
-  console.log(`${c(BOLD + WHITE, s.track.name)} ${c(DIM, "--")} ${c(CYAN, s.track.artist)}`);
-  if (s.track.album) {
-    console.log(c(DIM, s.track.album));
-  }
-}
-
-export function outputHumanDevice(d: Device, index?: number) {
-  const prefix = index !== undefined ? `${c(DIM, `${(index + 1).toString().padStart(3)}.`)} ` : "";
-  const active = d.active ? c(GREEN, " (active)") : "";
-  console.log(`${prefix}${c(BOLD + WHITE, d.name)} ${c(DIM, d.kind)}${active}`);
-}
-
-// ── Dispatcher ──
 
 export function getOutputMode(opts: { json?: boolean; plain?: boolean }): OutputMode {
   if (opts.json && opts.plain) {
@@ -154,83 +71,162 @@ export function getOutputMode(opts: { json?: boolean; plain?: boolean }): Output
   return "human";
 }
 
+export function outputJson(data: unknown) {
+  console.log(JSON.stringify(data, null, 2));
+}
+
+export function outputKeyValue(key: string, value: string) {
+  console.log(`${c(DIM, `${key}:`)} ${value}`);
+}
+
+export function outputMessage(msg: string) {
+  console.log(c(GREEN, msg));
+}
+
+/** Report a completed action: JSON gets `data`, humans get `message`, plain stays silent. */
+export function outputAction(mode: OutputMode, data: Record<string, unknown>, message: string) {
+  if (mode === "json") outputJson(data);
+  else if (mode === "human") outputMessage(message);
+}
+
+/** Report a single value: `{ key: value }` as JSON, the bare value as plain, `label: value` for humans. */
+export function outputValue(mode: OutputMode, key: string, value: string | number | boolean, label: string) {
+  if (mode === "json") outputJson({ [key]: value });
+  else if (mode === "plain") console.log(String(value));
+  else outputKeyValue(label, String(value));
+}
+
+// ── Lists ──
+
+interface ListFormat<T> {
+  noun: string;
+  plain: (item: T) => void;
+  human: (item: T) => string;
+}
+
+function outputList<T>(items: T[], mode: OutputMode, format: ListFormat<T>) {
+  if (mode === "json") return outputJson(items);
+  if (mode === "plain") return items.forEach(format.plain);
+  if (items.length === 0) return console.log(c(DIM, `No ${format.noun}s found`));
+  console.log(c(DIM, plural(items.length, format.noun)));
+  for (const [i, item] of items.entries()) {
+    console.log(`${c(DIM, `${(i + 1).toString().padStart(3)}.`)} ${format.human(item)}`);
+  }
+}
+
+const trackFormat: ListFormat<Track> = {
+  noun: "track",
+  plain: (t) => row("track", t.id, t.name, t.artist, t.album, formatDuration(t.duration), t.source),
+  human: (t) =>
+    `${c(BOLD + WHITE, t.name)} ${c(DIM, "--")} ${c(CYAN, t.artist)} ${c(DIM, "/")} ${c(DIM, t.album)} ${c(DIM, formatDuration(t.duration))}`,
+};
+
+const albumFormat: ListFormat<Album> = {
+  noun: "album",
+  plain: (a) => row("album", a.id, a.name, a.artist, a.trackCount, a.year, a.source),
+  human: (a) =>
+    [
+      `${c(BOLD + WHITE, a.name)} ${c(DIM, "--")} ${c(CYAN, a.artist)}`,
+      a.year ? c(DIM, `(${a.year})`) : "",
+      a.trackCount !== undefined ? c(DIM, plural(a.trackCount, "track")) : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+};
+
+const artistFormat: ListFormat<Artist> = {
+  noun: "artist",
+  plain: (a) => row("artist", a.id, a.name, a.genre, a.source),
+  human: (a) => `${c(BOLD + WHITE, a.name)}${a.genre ? ` ${c(DIM, `(${a.genre})`)}` : ""}`,
+};
+
+const playlistFormat: ListFormat<Playlist> = {
+  noun: "playlist",
+  plain: (p) => row("playlist", p.id, p.name, p.trackCount, p.source),
+  human: (p) =>
+    `${c(BOLD + WHITE, p.name)}${p.trackCount !== undefined ? ` ${c(DIM, plural(p.trackCount, "track"))}` : ""}`,
+};
+
+const deviceFormat: ListFormat<Device> = {
+  noun: "device",
+  plain: (d) => row("device", d.id, d.name, d.kind, d.active),
+  human: (d) => `${c(BOLD + WHITE, d.name)} ${c(DIM, d.kind)}${d.active ? c(GREEN, " (active)") : ""}`,
+};
+
 export function outputTracks(tracks: Track[], mode: OutputMode) {
-  if (mode === "json") return outputJson(tracks);
-  if (mode === "plain") return tracks.forEach(outputPlainTrack);
-  if (tracks.length === 0) return console.log(c(DIM, "No tracks found"));
-  console.log(c(DIM, `${tracks.length} track${tracks.length === 1 ? "" : "s"}`));
-  for (const [i, t] of tracks.entries()) outputHumanTrack(t, i);
+  outputList(tracks, mode, trackFormat);
 }
 
 export function outputAlbums(albums: Album[], mode: OutputMode) {
-  if (mode === "json") return outputJson(albums);
-  if (mode === "plain") return albums.forEach(outputPlainAlbum);
-  if (albums.length === 0) return console.log(c(DIM, "No albums found"));
-  console.log(c(DIM, `${albums.length} album${albums.length === 1 ? "" : "s"}`));
-  for (const [i, a] of albums.entries()) outputHumanAlbum(a, i);
+  outputList(albums, mode, albumFormat);
 }
 
 export function outputArtists(artists: Artist[], mode: OutputMode) {
-  if (mode === "json") return outputJson(artists);
-  if (mode === "plain") return artists.forEach(outputPlainArtist);
-  if (artists.length === 0) return console.log(c(DIM, "No artists found"));
-  console.log(c(DIM, `${artists.length} artist${artists.length === 1 ? "" : "s"}`));
-  for (const [i, a] of artists.entries()) outputHumanArtist(a, i);
+  outputList(artists, mode, artistFormat);
 }
 
 export function outputPlaylists(playlists: Playlist[], mode: OutputMode) {
-  if (mode === "json") return outputJson(playlists);
-  if (mode === "plain") return playlists.forEach(outputPlainPlaylist);
-  if (playlists.length === 0) return console.log(c(DIM, "No playlists found"));
-  console.log(c(DIM, `${playlists.length} playlist${playlists.length === 1 ? "" : "s"}`));
-  for (const [i, p] of playlists.entries()) outputHumanPlaylist(p, i);
-}
-
-export function outputStatus(status: PlaybackState, mode: OutputMode) {
-  if (mode === "json") return outputJson(status);
-  if (mode === "plain") return outputPlainStatus(status);
-  outputHumanStatus(status);
+  outputList(playlists, mode, playlistFormat);
 }
 
 export function outputDevices(devices: Device[], mode: OutputMode) {
-  if (mode === "json") return outputJson(devices);
-  if (mode === "plain") {
-    for (const d of devices) console.log(`device\t${tsv(d.id)}\t${tsv(d.name)}\t${tsv(d.kind)}\t${d.active}`);
-    return;
-  }
-  if (devices.length === 0) return console.log(c(DIM, "No devices found"));
-  for (const [i, d] of devices.entries()) outputHumanDevice(d, i);
+  outputList(devices, mode, deviceFormat);
 }
 
 export function outputSearchResults(results: SearchResults, mode: OutputMode) {
   if (mode === "json") return outputJson(results);
 
-  const hasResults =
-    results.tracks.length > 0 ||
-    results.albums.length > 0 ||
-    results.artists.length > 0 ||
-    results.playlists.length > 0;
+  const sections = [
+    { title: "Tracks", print: () => outputTracks(results.tracks, mode), count: results.tracks.length },
+    { title: "Albums", print: () => outputAlbums(results.albums, mode), count: results.albums.length },
+    { title: "Artists", print: () => outputArtists(results.artists, mode), count: results.artists.length },
+    { title: "Playlists", print: () => outputPlaylists(results.playlists, mode), count: results.playlists.length },
+  ].filter((section) => section.count > 0);
 
-  if (!hasResults) {
+  if (sections.length === 0) {
     if (mode === "human") console.log(c(DIM, "No results found"));
     return;
   }
+  for (const section of sections) {
+    if (mode === "human") console.log(c(BOLD + CYAN, `\n${section.title}`));
+    section.print();
+  }
+}
 
-  if (results.tracks.length > 0) {
-    if (mode !== "plain") console.log(c(BOLD + CYAN, "\nTracks"));
-    outputTracks(results.tracks, mode);
+// ── Playback ──
+
+export function outputStatus(s: PlaybackState, mode: OutputMode) {
+  if (mode === "json") return outputJson(s);
+  if (mode === "plain") {
+    const progress = s.track ? `${formatDuration(s.position)}/${formatDuration(s.track.duration)}` : "";
+    return row(s.state, s.track?.name, s.track?.artist, progress, s.volume);
   }
-  if (results.albums.length > 0) {
-    if (mode !== "plain") console.log(c(BOLD + CYAN, "\nAlbums"));
-    outputAlbums(results.albums, mode);
+
+  if (!s.track) {
+    console.log(c(DIM, "Not playing"));
+    return;
   }
-  if (results.artists.length > 0) {
-    if (mode !== "plain") console.log(c(BOLD + CYAN, "\nArtists"));
-    outputArtists(results.artists, mode);
+
+  const state = s.state === "playing" ? c(GREEN, "playing") : c(YELLOW, "paused");
+  const progress = `${formatDuration(s.position)} / ${formatDuration(s.track.duration)}`;
+  const shuffle = s.shuffleEnabled ? c(MAGENTA, " [shuffle]") : "";
+  const repeat = s.repeatMode !== "off" ? c(MAGENTA, ` [repeat ${s.repeatMode}]`) : "";
+
+  console.log(`${state} ${c(DIM, "--")} ${c(DIM, progress)}${shuffle}${repeat}`);
+  console.log(`${c(BOLD + WHITE, s.track.name)} ${c(DIM, "--")} ${c(CYAN, s.track.artist)}`);
+  if (s.track.album) {
+    console.log(c(DIM, s.track.album));
   }
-  if (results.playlists.length > 0) {
-    if (mode !== "plain") console.log(c(BOLD + CYAN, "\nPlaylists"));
-    outputPlaylists(results.playlists, mode);
+}
+
+// ── Playlist details ──
+
+function outputBars(title: string, items: CountedValue[]) {
+  if (items.length === 0) return;
+  console.log(c(BOLD + CYAN, `\n${title}`));
+  for (const item of items) {
+    const bar = "=".repeat(Math.min(item.count, 40));
+    console.log(`  ${c(WHITE, item.name.padEnd(25))} ${c(DIM, bar)} ${c(DIM, String(item.count))}`);
   }
 }
 
@@ -238,17 +234,14 @@ export function outputPlaylistDetails(details: PlaylistDetails, mode: OutputMode
   if (mode === "json") return outputJson(details);
 
   if (mode === "plain") {
-    console.log(
-      `playlist\t${tsv(details.id)}\t${tsv(details.name)}\t${details.trackCount}\t${details.totalDuration}\t${tsv(details.description)}`,
-    );
-    if (details.artworkPath) console.log(`artwork\t${tsv(details.artworkPath)}`);
-    if (details.artworkUrl) console.log(`artwork_url\t${tsv(details.artworkUrl)}`);
-    for (const a of details.topArtists) console.log(`artist\t${tsv(a.name)}\t${a.count}`);
-    for (const g of details.genres) console.log(`genre\t${tsv(g.name)}\t${g.count}`);
+    row("playlist", details.id, details.name, details.trackCount, details.totalDuration, details.description);
+    if (details.artworkPath) row("artwork", details.artworkPath);
+    if (details.artworkUrl) row("artwork_url", details.artworkUrl);
+    for (const a of details.topArtists) row("artist", a.name, a.count);
+    for (const g of details.genres) row("genre", g.name, g.count);
     return;
   }
 
-  // Human output
   console.log(c(BOLD + WHITE, details.name));
   if (details.description) {
     console.log(c(DIM, details.description));
@@ -258,53 +251,39 @@ export function outputPlaylistDetails(details: PlaylistDetails, mode: OutputMode
   const hours = Math.floor(details.totalDuration / 3600);
   const mins = Math.floor((details.totalDuration % 3600) / 60);
   const durationStr = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
-  console.log(`${c(CYAN, String(details.trackCount))} tracks ${c(DIM, "--")} ${c(CYAN, durationStr)}`);
+  console.log(`${c(CYAN, String(details.tracks.length))} tracks ${c(DIM, "--")} ${c(CYAN, durationStr)}`);
 
-  if (details.artworkPath) {
-    console.log(`${c(DIM, "Artwork:")} ${details.artworkPath}`);
-  }
-  if (details.artworkUrl) {
-    console.log(`${c(DIM, "Artwork:")} ${details.artworkUrl}`);
+  const artwork = details.artworkPath ?? details.artworkUrl;
+  if (artwork) {
+    console.log(`${c(DIM, "Artwork:")} ${artwork}`);
   }
 
-  if (details.topArtists.length > 0) {
-    console.log(c(BOLD + CYAN, "\nTop Artists"));
-    for (const a of details.topArtists) {
-      const bar = "=".repeat(Math.min(a.count, 40));
-      console.log(`  ${c(WHITE, a.name.padEnd(25))} ${c(DIM, bar)} ${c(DIM, String(a.count))}`);
-    }
-  }
-
-  if (details.genres.length > 0) {
-    console.log(c(BOLD + CYAN, "\nGenres"));
-    for (const g of details.genres) {
-      const bar = "=".repeat(Math.min(g.count, 40));
-      console.log(`  ${c(WHITE, g.name.padEnd(25))} ${c(DIM, bar)} ${c(DIM, String(g.count))}`);
-    }
-  }
+  outputBars("Top Artists", details.topArtists);
+  outputBars("Genres", details.genres);
 }
+
+// ── Library gardening ──
 
 export function outputLibraryAudit(audit: LibraryAudit, mode: OutputMode) {
   if (mode === "json") return outputJson(audit);
+
+  const counts: Array<[plainKey: string, label: string, value: number]> = [
+    ["tracks", "Tracks", audit.counts.tracks],
+    ["albums", "Albums", audit.counts.albums],
+    ["artists", "Artists", audit.counts.artists],
+    ["playlists", "Playlists", audit.counts.playlists],
+    ["orphans", "Tracks outside playlists", audit.counts.tracksNotFoundInAnyPlaylist],
+    ["duplicates", "Duplicate name/artist buckets", audit.counts.duplicateNameArtistBuckets],
+    ["exact_catalog_duplicates", "Exact catalog duplicate buckets", audit.counts.exactCatalogDuplicateBuckets],
+  ];
+
   if (mode === "plain") {
-    console.log(`tracks\t${audit.counts.tracks}`);
-    console.log(`albums\t${audit.counts.albums}`);
-    console.log(`artists\t${audit.counts.artists}`);
-    console.log(`playlists\t${audit.counts.playlists}`);
-    console.log(`orphans\t${audit.counts.tracksNotFoundInAnyPlaylist}`);
-    console.log(`duplicates\t${audit.counts.duplicateNameArtistBuckets}`);
-    console.log(`exact_catalog_duplicates\t${audit.counts.exactCatalogDuplicateBuckets}`);
+    for (const [key, , value] of counts) row(key, value);
     return;
   }
 
   console.log(c(BOLD + WHITE, "Library Audit"));
-  outputKeyValue("Tracks", String(audit.counts.tracks));
-  outputKeyValue("Albums", String(audit.counts.albums));
-  outputKeyValue("Artists", String(audit.counts.artists));
-  outputKeyValue("Playlists", String(audit.counts.playlists));
-  outputKeyValue("Tracks outside playlists", String(audit.counts.tracksNotFoundInAnyPlaylist));
-  outputKeyValue("Duplicate name/artist buckets", String(audit.counts.duplicateNameArtistBuckets));
-  outputKeyValue("Exact catalog duplicate buckets", String(audit.counts.exactCatalogDuplicateBuckets));
+  for (const [, label, value] of counts) outputKeyValue(label, String(value));
 
   if (audit.topGenres.length > 0) {
     console.log(c(BOLD + CYAN, "\nTop Genres"));
@@ -315,6 +294,10 @@ export function outputLibraryAudit(audit: LibraryAudit, mode: OutputMode) {
     for (const item of audit.playlists.largest.slice(0, 10)) {
       console.log(`  ${item.name}: ${item.fetchedTrackCount} tracks, ${item.durationHours}h`);
     }
+  }
+  if (audit.playlists.errors.length > 0) {
+    console.log(c(BOLD + YELLOW, `\nUnreadable Playlists (${audit.playlists.errors.length})`));
+    for (const item of audit.playlists.errors.slice(0, 10)) console.log(`  ${item.name}: ${c(DIM, item.error ?? "")}`);
   }
 }
 
@@ -327,10 +310,8 @@ export function outputLibraryDuplicates(audit: LibraryAudit, mode: OutputMode, l
   };
   if (mode === "json") return outputJson(payload);
   if (mode === "plain") {
-    for (const item of payload.duplicateCandidates) console.log(`duplicate\t${tsv(item.key)}\t${item.count}`);
-    for (const item of payload.exactCatalogDuplicates) {
-      console.log(`exact_catalog_duplicate\t${tsv(item.catalogId)}\t${item.count}`);
-    }
+    for (const item of payload.duplicateCandidates) row("duplicate", item.key, item.count);
+    for (const item of payload.exactCatalogDuplicates) row("exact_catalog_duplicate", item.catalogId, item.count);
     return;
   }
 
@@ -352,33 +333,22 @@ export function outputLibraryDuplicates(audit: LibraryAudit, mode: OutputMode, l
 export function outputLibraryOrphans(audit: LibraryAudit, mode: OutputMode, limit: number) {
   const tracks = audit.orphanTracks.slice(0, limit);
   if (mode === "json") return outputJson({ count: audit.orphanTracks.length, tracks });
-  if (mode === "plain") return tracks.forEach(outputPlainTrack);
-
-  console.log(c(BOLD + WHITE, `Tracks Outside Playlists (${audit.orphanTracks.length})`));
-  if (tracks.length === 0) {
-    console.log(c(DIM, "No orphan tracks found"));
-    return;
-  }
-  for (const [index, track] of tracks.entries()) outputHumanTrack(track, index);
+  if (mode === "human") console.log(c(BOLD + WHITE, `Tracks Outside Playlists (${audit.orphanTracks.length})`));
+  outputTracks(tracks, mode);
 }
 
 export function outputLibraryThemes(audit: LibraryAudit, mode: OutputMode, limit: number) {
   const suggestions = audit.themeSuggestions
-    .map((theme) => ({
-      ...theme,
-      candidates: theme.candidates.slice(0, limit),
-    }))
+    .map((theme) => ({ ...theme, candidates: theme.candidates.slice(0, limit) }))
     .filter((theme) => theme.candidates.length > 0);
 
   if (mode === "json") return outputJson({ count: suggestions.length, suggestions });
   if (mode === "plain") {
-    suggestions.forEach((theme) => {
-      theme.candidates.forEach((candidate) => {
-        console.log(
-          `theme_candidate\t${tsv(theme.playlistName)}\t${candidate.score}\t${tsv(candidate.track.id)}\t${tsv(candidate.track.name)}\t${tsv(candidate.track.artist)}\t${tsv(candidate.reasons.join(","))}`,
-        );
-      });
-    });
+    for (const theme of suggestions) {
+      for (const { score, track, reasons } of theme.candidates) {
+        row("theme_candidate", theme.playlistName, score, track.id, track.name, track.artist, reasons.join(","));
+      }
+    }
     return;
   }
 
@@ -387,27 +357,15 @@ export function outputLibraryThemes(audit: LibraryAudit, mode: OutputMode, limit
     console.log(c(DIM, "No theme suggestions found"));
     return;
   }
-  suggestions.forEach((theme) => {
+  for (const theme of suggestions) {
     console.log(c(BOLD + CYAN, `\n${theme.playlistName}`));
-    theme.candidates.forEach((candidate) => {
-      console.log(
-        `  ${candidate.track.name} ${c(DIM, "--")} ${candidate.track.artist} ${c(DIM, `(${candidate.reasons.join(", ")})`)}`,
-      );
-    });
-  });
+    for (const { track, reasons } of theme.candidates) {
+      console.log(`  ${track.name} ${c(DIM, "--")} ${track.artist} ${c(DIM, `(${reasons.join(", ")})`)}`);
+    }
+  }
 }
 
-export function outputKeyValue(key: string, value: string) {
-  console.log(`${c(DIM, `${key}:`)} ${value}`);
-}
-
-export function outputMessage(msg: string) {
-  console.log(c(GREEN, msg));
-}
-
-export function outputError(msg: string) {
-  console.error(c(RED, `error: ${msg}`));
-}
+// ── Errors ──
 
 function formatCause(cause: unknown): string {
   if (cause instanceof Error) return cause.stack || `${cause.name}: ${cause.message}`;
@@ -415,24 +373,13 @@ function formatCause(cause: unknown): string {
 }
 
 export function outputErrorDetails(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(c(RED, `error: ${message}`));
+
   if (isMusicError(error)) {
-    outputError(error.message);
-    if (error.hint) {
-      console.error(c(DIM, error.hint));
-    }
-    if (verboseEnabled && error.cause !== undefined) {
-      console.error(c(DIM, `cause: ${formatCause(error.cause)}`));
-    }
-    return;
+    if (error.hint) console.error(c(DIM, error.hint));
+    if (verboseEnabled && error.cause !== undefined) console.error(c(DIM, `cause: ${formatCause(error.cause)}`));
+  } else if (verboseEnabled && error instanceof Error && error.stack) {
+    console.error(c(DIM, error.stack));
   }
-
-  if (error instanceof Error) {
-    outputError(error.message);
-    if (verboseEnabled && error.stack) {
-      console.error(c(DIM, error.stack));
-    }
-    return;
-  }
-
-  outputError(String(error));
 }

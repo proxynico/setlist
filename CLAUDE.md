@@ -63,10 +63,11 @@ src/
     input.ts            Input parsing
     output.ts           Human, JSON, and plain output helpers
     library-audit.ts    Read-only library gardening analysis
-    config.ts           Config and token facade
+    config.ts           Config file
+    concurrency.ts      Bounded parallel map
     cookies.ts          Browser cookie extraction
     safari-cookies.ts   Safari binarycookies parser
-    secrets.ts          Keychain storage
+    secrets.ts          Keychain storage (user token, cached developer token)
 tests/
   api-parsing.test.ts   API identity, validation, storefront, pagination
   library-audit.test.ts Library audit analysis
@@ -101,6 +102,9 @@ Config:      config status | config engine [native|api|auto] | config storefront
 - Store Apple Music tokens only in Keychain.
 - Never write auth tokens to config, docs, logs, or tests.
 - Native JXA input must be validated or inserted with `JSON.stringify()`.
+- Native reads use bulk getters (`tracks.name()`) or one `properties()` call per
+  track. Each Apple Event costs about 25ms, so per-field reads turn a library
+  scan into minutes.
 - Library gardening commands are read-only until an explicit review/apply flow
   exists.
 - Queue management stays explicitly unsupported unless a reliable Music.app
@@ -124,7 +128,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 61 tests across 12 files
+bun test  # 67 tests across 13 files
 ```
 
 ## macOS Notes

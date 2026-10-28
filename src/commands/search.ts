@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { MusicEngine, SearchType } from "../lib/types";
+import type { MusicEngine, OutputMode, SearchResults, SearchType } from "../lib/types";
 import { parseInteger } from "../lib/input";
 import {
   getOutputMode,
@@ -10,65 +10,69 @@ import {
   outputSearchResults,
 } from "../lib/output";
 
+interface SearchCommand {
+  command: string;
+  alias?: string;
+  description: string;
+  types: SearchType[];
+  defaultLimit: string;
+  output: (results: SearchResults, mode: OutputMode) => void;
+}
+
+const SEARCH_COMMANDS: SearchCommand[] = [
+  {
+    command: "track",
+    alias: "song",
+    description: "Search for tracks",
+    types: ["track"],
+    defaultLimit: "20",
+    output: (results, mode) => outputTracks(results.tracks, mode),
+  },
+  {
+    command: "album",
+    description: "Search for albums",
+    types: ["album"],
+    defaultLimit: "20",
+    output: (results, mode) => outputAlbums(results.albums, mode),
+  },
+  {
+    command: "artist",
+    description: "Search for artists",
+    types: ["artist"],
+    defaultLimit: "20",
+    output: (results, mode) => outputArtists(results.artists, mode),
+  },
+  {
+    command: "playlist",
+    description: "Search for playlists",
+    types: ["playlist"],
+    defaultLimit: "20",
+    output: (results, mode) => outputPlaylists(results.playlists, mode),
+  },
+  {
+    command: "all",
+    description: "Search across all types (limit applies per type)",
+    types: ["track", "album", "artist", "playlist"],
+    defaultLimit: "10",
+    output: outputSearchResults,
+  },
+];
+
 export function registerSearchCommands(program: Command, getEngine: () => MusicEngine) {
   const search = program
     .command("search")
     .description("Search the Apple Music catalog (falls back to your local library when not authenticated)");
 
-  search
-    .command("track <query>")
-    .alias("song")
-    .description("Search for tracks")
-    .option("-l, --limit <n>", "Max results", "20")
-    .action(async (query: string, opts) => {
-      const engine = getEngine();
-      const results = await engine.search(query, ["track"], parseInteger("limit", opts.limit, { min: 1 }));
-      const mode = getOutputMode(program.opts());
-      outputTracks(results.tracks, mode);
-    });
-
-  search
-    .command("album <query>")
-    .description("Search for albums")
-    .option("-l, --limit <n>", "Max results", "20")
-    .action(async (query: string, opts) => {
-      const engine = getEngine();
-      const results = await engine.search(query, ["album"], parseInteger("limit", opts.limit, { min: 1 }));
-      const mode = getOutputMode(program.opts());
-      outputAlbums(results.albums, mode);
-    });
-
-  search
-    .command("artist <query>")
-    .description("Search for artists")
-    .option("-l, --limit <n>", "Max results", "20")
-    .action(async (query: string, opts) => {
-      const engine = getEngine();
-      const results = await engine.search(query, ["artist"], parseInteger("limit", opts.limit, { min: 1 }));
-      const mode = getOutputMode(program.opts());
-      outputArtists(results.artists, mode);
-    });
-
-  search
-    .command("playlist <query>")
-    .description("Search for playlists")
-    .option("-l, --limit <n>", "Max results", "20")
-    .action(async (query: string, opts) => {
-      const engine = getEngine();
-      const results = await engine.search(query, ["playlist"], parseInteger("limit", opts.limit, { min: 1 }));
-      const mode = getOutputMode(program.opts());
-      outputPlaylists(results.playlists, mode);
-    });
-
-  search
-    .command("all <query>")
-    .description("Search across all types")
-    .option("-l, --limit <n>", "Max results per type", "10")
-    .action(async (query: string, opts) => {
-      const engine = getEngine();
-      const types: SearchType[] = ["track", "album", "artist", "playlist"];
-      const results = await engine.search(query, types, parseInteger("limit", opts.limit, { min: 1 }));
-      const mode = getOutputMode(program.opts());
-      outputSearchResults(results, mode);
-    });
+  for (const spec of SEARCH_COMMANDS) {
+    const command = search
+      .command(`${spec.command} <query>`)
+      .description(spec.description)
+      .option("-l, --limit <n>", "Max results", spec.defaultLimit)
+      .action(async (query: string, opts: { limit: string }) => {
+        const limit = parseInteger("limit", opts.limit, { min: 1 });
+        const results = await getEngine().search(query, spec.types, limit);
+        spec.output(results, getOutputMode(program.opts()));
+      });
+    if (spec.alias) command.alias(spec.alias);
+  }
 }

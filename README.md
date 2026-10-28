@@ -111,6 +111,7 @@ Setlist has three engines.
 
 `auto` is the default. It does not hide API failures. If API auth exists and an
 API request fails, the real error is shown instead of silently falling back.
+IDs from `--json` output always go back to the engine that produced them.
 
 Choose an engine per command:
 
@@ -259,7 +260,7 @@ bun run build
 Current test suite:
 
 ```bash
-bun test  # 61 tests across 12 files
+bun test  # 67 tests across 13 files
 ```
 
 ## Design Rules

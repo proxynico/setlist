@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
-import { Command } from "commander";
+import { Command, CommanderError, Option } from "commander";
+import pkg from "../package.json";
 import { NativeEngine } from "./engines/native";
 import { ApiEngine } from "./engines/api";
 import { AutoEngine } from "./engines/auto";
@@ -12,83 +13,61 @@ import { registerDeviceCommands } from "./commands/devices";
 import { registerQueueCommands } from "./commands/queue";
 import { registerConfigCommands } from "./commands/config";
 import { loadConfig } from "./lib/config";
-import { ValidationError } from "./lib/errors";
-import { setColorEnabled, setVerboseEnabled, outputErrorDetails } from "./lib/output";
-import type { CliConfig, MusicEngine } from "./lib/types";
+import { getOutputMode, outputErrorDetails, setColorEnabled, setVerboseEnabled } from "./lib/output";
+import { type CliConfig, ENGINE_NAMES, type EngineName, type MusicEngine } from "./lib/types";
 
-const VERSION = "0.1.0";
-let runtimeConfig: CliConfig = { defaultEngine: "auto", storefront: "auto" };
+let config: CliConfig;
 
 const program = new Command()
   .name("setlist")
-  .description("Apple Music CLI for power users and AI agents")
-  .version(VERSION)
+  .description(pkg.description)
+  .version(pkg.version)
   .option("--json", "Output as JSON")
   .option("--plain", "Output as tab-separated plain text")
   .option("--no-color", "Disable color output")
-  .option("-e, --engine <engine>", "Engine: native, api, auto")
-  .option("-v, --verbose", "Verbose output")
+  .addOption(new Option("-e, --engine <engine>", "Engine").choices(ENGINE_NAMES))
+  .option("-v, --verbose", "Show the underlying cause when a command fails")
+  // Subcommands inherit this, so usage errors reach the catch below instead of exiting.
+  .exitOverride()
   .hook("preAction", () => {
     const opts = program.opts();
-    if (opts.noColor || process.env.NO_COLOR || process.env.TERM === "dumb") {
-      setColorEnabled(false);
-    }
-    if (opts.verbose) {
-      setVerboseEnabled(true);
-    }
-    if (opts.json && opts.plain) {
-      throw new ValidationError("--json and --plain cannot be used together");
-    }
+    if (opts.color === false) setColorEnabled(false);
+    if (opts.verbose) setVerboseEnabled(true);
+    getOutputMode(opts); // reject --json with --plain before any command runs
   });
 
-function createEngine(): MusicEngine {
-  const opts = program.opts();
-  const engineName = opts.engine ?? runtimeConfig.defaultEngine ?? "auto";
-  switch (engineName) {
+function createEngine(name: EngineName): MusicEngine {
+  switch (name) {
     case "native":
       return new NativeEngine();
     case "api":
       return new ApiEngine();
     case "auto":
       return new AutoEngine();
-    default:
-      throw new ValidationError(`Unknown engine: ${engineName}. Use one of: native, api, auto`);
   }
 }
 
-// Lazy engine — created on first command that needs it
-let engine: MusicEngine | null = null;
+// Created on first use, so config and auth commands never touch Music.app or the API.
+let engine: MusicEngine | undefined;
 function getEngine(): MusicEngine {
-  if (!engine) engine = createEngine();
+  engine ??= createEngine(program.opts().engine ?? config.defaultEngine);
   return engine;
 }
 
-// Register all command groups
 registerPlaybackCommands(program, getEngine);
 registerSearchCommands(program, getEngine);
 registerLibraryCommands(program, getEngine);
 registerAuthCommands(program);
 registerDeviceCommands(program, getEngine);
-registerQueueCommands(program, getEngine);
+registerQueueCommands(program);
 registerConfigCommands(program);
 
-// Error handling
-program.exitOverride();
-
-async function main() {
-  try {
-    runtimeConfig = await loadConfig();
-    await program.parseAsync(process.argv);
-  } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err) {
-      const code = (err as { code: string }).code;
-      if (code === "commander.helpDisplayed" || code === "commander.version") {
-        process.exit(0);
-      }
-    }
-    outputErrorDetails(err);
-    process.exit(1);
-  }
+try {
+  config = await loadConfig();
+  await program.parseAsync(process.argv);
+} catch (err: unknown) {
+  // Commander has already printed its own help, version, and usage errors.
+  if (err instanceof CommanderError) process.exit(err.exitCode);
+  outputErrorDetails(err);
+  process.exit(1);
 }
-
-main();
