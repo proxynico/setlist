@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ValidationError } from "../src/lib/errors";
-import type { MusicEngine, PlaybackState } from "../src/lib/types";
+import type { EngineName, MusicEngine, PlaybackState } from "../src/lib/types";
 import { createMcpServer } from "../src/mcp";
 import { createStubEngine } from "./stub-engine";
 
-async function connect(engine: MusicEngine): Promise<Client> {
+async function connect(engine: MusicEngine, engines: Partial<Record<EngineName, MusicEngine>> = {}): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await createMcpServer(() => engine).server.connect(serverTransport);
+  await createMcpServer((name) => (name && engines[name]) || engine).server.connect(serverTransport);
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(clientTransport);
   return client;
@@ -65,6 +65,23 @@ describe("MCP server", () => {
     expect(byName.search.annotations?.readOnlyHint).toBe(true);
     expect(byName.library_report.annotations?.readOnlyHint).toBe(true);
     expect(byName.playlist_remove.annotations?.destructiveHint).toBe(true);
+    // Skipping twice skips two tracks; setting the volume twice changes nothing more.
+    expect(byName.playback.annotations?.idempotentHint).toBe(false);
+    expect(byName.set_volume.annotations?.idempotentHint).toBe(true);
+  });
+
+  test("reads from the engine a tool asks for, so edits can get native IDs", async () => {
+    const defaultPlaylists = mock(async () => []);
+    const nativePlaylists = mock(async () => []);
+    const client = await connect(createStubEngine({ getPlaylists: defaultPlaylists }), {
+      native: createStubEngine({ getPlaylists: nativePlaylists }),
+    });
+
+    await client.callTool({ name: "library", arguments: { kind: "playlists" } });
+    await client.callTool({ name: "library", arguments: { kind: "playlists", engine: "native" } });
+
+    expect(defaultPlaylists).toHaveBeenCalledTimes(1);
+    expect(nativePlaylists).toHaveBeenCalledTimes(1);
   });
 
   test("returns status as JSON, with album art only when asked", async () => {

@@ -11,7 +11,7 @@ import {
   orphansReport,
   themesReport,
 } from "./lib/library-audit";
-import type { MusicEngine, SearchType } from "./lib/types";
+import type { EngineName, MusicEngine, SearchType } from "./lib/types";
 
 /**
  * MCP server over the same engines as the CLI, so AI assistants can drive
@@ -20,13 +20,13 @@ import type { MusicEngine, SearchType } from "./lib/types";
 
 const INSTRUCTIONS = `Setlist controls Apple Music on this Mac and reads the user's library.
 IDs are source-qualified (native:persistent:…, api:library:…, api:catalog:…); pass them back unchanged.
-Playlist edits need native:persistent IDs from Music.app, so read playlists and tracks with the native engine before editing.
+Playlist edits need native:persistent IDs from Music.app: before editing, read playlists and tracks with engine "native".
 Library reports only read; nothing here deletes tracks.`;
 
 const READ_ONLY = { readOnlyHint: true };
-const CONTROL = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const EDIT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
-const DESTRUCTIVE = { ...EDIT, destructiveHint: true };
+const IDEMPOTENT = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+const ACTION = { ...IDEMPOTENT, idempotentHint: false };
+const DESTRUCTIVE = { ...ACTION, destructiveHint: true };
 
 type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 type ToolResult = { content: Content[]; isError?: true };
@@ -59,8 +59,12 @@ const SEARCH_TYPES: Record<string, SearchType[]> = {
 
 const limitSchema = (fallback: number) => z.number().int().min(1).max(500).default(fallback).describe("Max results");
 const trackIds = z.array(z.string().min(1)).min(1).describe("native:persistent track IDs");
+const engineSchema = z
+  .enum(["native", "api"])
+  .optional()
+  .describe("Read from Music.app (native) or the Apple Music API (api). Playlist edits need native IDs.");
 
-export function createMcpServer(getEngine: () => MusicEngine): {
+export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): {
   server: McpServer;
   tools: Record<string, RegisteredTool>;
 } {
@@ -91,7 +95,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Play the first library track matching a query, or resume playback when no query is given.",
       inputSchema: { query: z.string().min(1).optional().describe("Song, artist or album to find in the library") },
-      annotations: CONTROL,
+      annotations: ACTION,
     },
     tool(async ({ query }) => {
       await getEngine().play(query);
@@ -104,7 +108,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Pause, resume, or skip to the next or previous track.",
       inputSchema: { action: z.enum(["pause", "resume", "next", "previous"]) },
-      annotations: CONTROL,
+      annotations: ACTION,
     },
     tool(async ({ action }) => {
       await getEngine()[action]();
@@ -117,7 +121,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Jump to a position in the current track.",
       inputSchema: { seconds: z.number().int().min(0) },
-      annotations: CONTROL,
+      annotations: IDEMPOTENT,
     },
     tool(async ({ seconds }) => {
       await getEngine().seek(seconds);
@@ -130,7 +134,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Set Music.app's volume.",
       inputSchema: { level: z.number().int().min(0).max(100) },
-      annotations: CONTROL,
+      annotations: IDEMPOTENT,
     },
     tool(async ({ level }) => {
       await getEngine().setVolume(level);
@@ -143,7 +147,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Turn shuffle on or off.",
       inputSchema: { enabled: z.boolean() },
-      annotations: CONTROL,
+      annotations: IDEMPOTENT,
     },
     tool(async ({ enabled }) => {
       await getEngine().setShuffle(enabled);
@@ -156,7 +160,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Set repeat to off, one track, or all.",
       inputSchema: { mode: z.enum(["off", "one", "all"]) },
-      annotations: CONTROL,
+      annotations: IDEMPOTENT,
     },
     tool(async ({ mode }) => {
       await getEngine().setRepeat(mode);
@@ -185,10 +189,13 @@ export function createMcpServer(getEngine: () => MusicEngine): {
         query: z.string().min(1),
         type: z.enum(["track", "album", "artist", "playlist", "all"]).default("all"),
         limit: limitSchema(10),
+        engine: engineSchema,
       },
       annotations: { ...READ_ONLY, openWorldHint: true },
     },
-    tool(async ({ query, type, limit }) => [json(await getEngine().search(query, SEARCH_TYPES[type], limit))]),
+    tool(async ({ query, type, limit, engine }) => [
+      json(await getEngine(engine).search(query, SEARCH_TYPES[type], limit)),
+    ]),
   );
 
   tools.library = server.registerTool(
@@ -199,14 +206,15 @@ export function createMcpServer(getEngine: () => MusicEngine): {
         kind: z.enum(["tracks", "albums", "playlists"]),
         limit: limitSchema(50),
         offset: z.number().int().min(0).default(0).describe("Items to skip (tracks and albums)"),
+        engine: engineSchema,
       },
       annotations: READ_ONLY,
     },
-    tool(async ({ kind, limit, offset }) => {
-      const engine = getEngine();
-      if (kind === "tracks") return [json(await engine.getLibraryTracks(limit, offset))];
-      if (kind === "albums") return [json(await engine.getLibraryAlbums(limit, offset))];
-      return [json(await engine.getPlaylists())];
+    tool(async ({ kind, limit, offset, engine }) => {
+      const reader = getEngine(engine);
+      if (kind === "tracks") return [json(await reader.getLibraryTracks(limit, offset))];
+      if (kind === "albums") return [json(await reader.getLibraryAlbums(limit, offset))];
+      return [json(await reader.getPlaylists())];
     }),
   );
 
@@ -214,10 +222,10 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     "playlist",
     {
       description: "A playlist's tracks, length, top artists and genres.",
-      inputSchema: { id: z.string().min(1).describe("Playlist ID from the library tool") },
+      inputSchema: { id: z.string().min(1).describe("Playlist ID from the library tool"), engine: engineSchema },
       annotations: READ_ONLY,
     },
-    tool(async ({ id }) => [json(await getEngine().getPlaylistInfo(id))]),
+    tool(async ({ id, engine }) => [json(await getEngine(engine).getPlaylistInfo(id))]),
   );
 
   tools.library_report = server.registerTool(
@@ -235,11 +243,12 @@ export function createMcpServer(getEngine: () => MusicEngine): {
         report: z.enum(["summary", "duplicates", "orphans", "themes"]),
         limit: limitSchema(25).describe("Max entries per list (duplicates, orphans, suggestions per playlist)"),
         max_items: z.number().int().min(1).default(20000).describe("Max library tracks and albums to scan"),
+        engine: engineSchema,
       },
       annotations: READ_ONLY,
     },
-    tool(async ({ report, limit, max_items }) => {
-      const snapshot = await collectLibrarySnapshot(getEngine(), { maxItems: max_items });
+    tool(async ({ report, limit, max_items, engine }) => {
+      const snapshot = await collectLibrarySnapshot(getEngine(engine), { maxItems: max_items });
       const audit = analyzeLibrarySnapshot(snapshot, { suggestionsPerTheme: limit });
       if (report === "duplicates") return [json(duplicatesReport(audit, limit))];
       if (report === "orphans") return [json(orphansReport(audit, limit))];
@@ -255,7 +264,7 @@ export function createMcpServer(getEngine: () => MusicEngine): {
     {
       description: "Add tracks to a playlist in Music.app.",
       inputSchema: { playlist_id: z.string().min(1).describe("native:persistent playlist ID"), track_ids: trackIds },
-      annotations: EDIT,
+      annotations: ACTION,
     },
     tool(async ({ playlist_id, track_ids }) => {
       await getEngine().addToPlaylist(playlist_id, track_ids);

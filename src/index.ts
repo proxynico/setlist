@@ -49,9 +49,14 @@ function createEngine(name: EngineName): MusicEngine {
 }
 
 // Created on first use, so config and auth commands never touch Music.app or the API.
-let engine: MusicEngine | undefined;
-function getEngine(): MusicEngine {
-  engine ??= createEngine(program.opts().engine ?? config.defaultEngine);
+// Commands use the selected engine; MCP tools can also ask for a specific one.
+const engines = new Map<EngineName, MusicEngine>();
+function getEngine(name: EngineName = program.opts().engine ?? config.defaultEngine): MusicEngine {
+  let engine = engines.get(name);
+  if (!engine) {
+    engine = createEngine(name);
+    engines.set(name, engine);
+  }
   return engine;
 }
 
