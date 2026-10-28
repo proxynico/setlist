@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import type { LibraryAudit } from "./library-audit";
+import { besideImage, type CellBox, type ImageProtocol, imageEscape } from "./terminal-image";
 import type {
   OutputMode,
   Track,
@@ -21,7 +23,6 @@ const CYAN = "\x1b[36m";
 const GREEN = "\x1b[32m";
 const YELLOW = "\x1b[33m";
 const RED = "\x1b[31m";
-const MAGENTA = "\x1b[35m";
 
 let colorEnabled = Boolean(process.stdout.isTTY) && !process.env.NO_COLOR && process.env.TERM !== "dumb";
 let verboseEnabled = false;
@@ -195,7 +196,54 @@ export function outputSearchResults(results: SearchResults, mode: OutputMode) {
 
 // ── Playback ──
 
-export function outputStatus(s: PlaybackState, mode: OutputMode) {
+const ARTWORK_BOX: CellBox = { columns: 12, rows: 6 };
+const PROGRESS_WIDTH = 24;
+
+/** Shorten `text` to `width` terminal cells, ending with an ellipsis. */
+function fit(text: string, width?: number): string {
+  if (width === undefined || Bun.stringWidth(text) <= width) return text;
+  let out = "";
+  for (const char of text) {
+    if (Bun.stringWidth(`${out}${char}…`) > width) break;
+    out += char;
+  }
+  return `${out}…`;
+}
+
+function statusLines(s: PlaybackState & { track: Track }, width?: number): string[] {
+  const { track } = s;
+  const album = [track.album, track.year].filter(Boolean).join(" · ");
+  const filled = track.duration > 0 ? Math.round(Math.min(1, s.position / track.duration) * PROGRESS_WIDTH) : 0;
+  const icon = s.state === "playing" ? c(GREEN, "▶") : c(YELLOW, "‖");
+  const bar = `${c(WHITE, "━".repeat(filled))}${c(DIM, "─".repeat(PROGRESS_WIDTH - filled))}`;
+  const modes = [
+    `volume ${s.volume}`,
+    s.shuffleEnabled ? "shuffle" : "",
+    s.repeatMode !== "off" ? `repeat ${s.repeatMode}` : "",
+  ].filter(Boolean);
+
+  return [
+    c(BOLD + WHITE, fit(track.name, width)),
+    c(CYAN, fit(track.artist, width)),
+    album ? c(DIM, fit(album, width)) : "",
+    "",
+    `${icon} ${c(DIM, formatDuration(s.position))} ${bar} ${c(DIM, formatDuration(track.duration))}`,
+    c(DIM, modes.join(" · ")),
+  ];
+}
+
+/** The current track's artwork as an inline image escape, when the terminal and track allow it. */
+function artworkImage(s: PlaybackState, imageProtocol?: ImageProtocol): string | undefined {
+  const columns = process.stdout.columns ?? 0;
+  if (!imageProtocol || !s.artworkPath || columns < ARTWORK_BOX.columns + 40) return undefined;
+  try {
+    return imageEscape(imageProtocol, readFileSync(s.artworkPath), ARTWORK_BOX);
+  } catch {
+    return undefined; // Artwork is decoration; show the text alone.
+  }
+}
+
+export function outputStatus(s: PlaybackState, mode: OutputMode, imageProtocol?: ImageProtocol) {
   if (mode === "json") return outputJson(s);
   if (mode === "plain") {
     const progress = s.track ? `${formatDuration(s.position)}/${formatDuration(s.track.duration)}` : "";
@@ -207,16 +255,15 @@ export function outputStatus(s: PlaybackState, mode: OutputMode) {
     return;
   }
 
-  const state = s.state === "playing" ? c(GREEN, "playing") : c(YELLOW, "paused");
-  const progress = `${formatDuration(s.position)} / ${formatDuration(s.track.duration)}`;
-  const shuffle = s.shuffleEnabled ? c(MAGENTA, " [shuffle]") : "";
-  const repeat = s.repeatMode !== "off" ? c(MAGENTA, ` [repeat ${s.repeatMode}]`) : "";
-
-  console.log(`${state} ${c(DIM, "--")} ${c(DIM, progress)}${shuffle}${repeat}`);
-  console.log(`${c(BOLD + WHITE, s.track.name)} ${c(DIM, "--")} ${c(CYAN, s.track.artist)}`);
-  if (s.track.album) {
-    console.log(c(DIM, s.track.album));
+  const playing = { ...s, track: s.track };
+  const image = artworkImage(s, imageProtocol);
+  const columns = process.stdout.columns;
+  if (!image) {
+    for (const line of statusLines(playing, columns && columns - 1)) console.log(line);
+    return;
   }
+  const lines = statusLines(playing, columns - ARTWORK_BOX.columns - 3);
+  process.stdout.write(besideImage({ image, box: ARTWORK_BOX, lines }));
 }
 
 // ── Playlist details ──

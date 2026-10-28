@@ -2,6 +2,7 @@ import { Argument, type Command } from "commander";
 import type { MusicEngine, RepeatMode } from "../lib/types";
 import { parseInteger } from "../lib/input";
 import { formatDuration, getOutputMode, outputAction, outputStatus, outputValue } from "../lib/output";
+import { detectImageProtocol } from "../lib/terminal-image";
 
 export function registerPlaybackCommands(program: Command, getEngine: () => MusicEngine) {
   const mode = () => getOutputMode(program.opts());
@@ -59,7 +60,10 @@ export function registerPlaybackCommands(program: Command, getEngine: () => Musi
     .command("status")
     .description("Show current playback status")
     .action(async () => {
-      outputStatus(await getEngine().getStatus(), mode());
+      const outputMode = mode();
+      const imageProtocol = outputMode === "human" ? detectImageProtocol() : undefined;
+      const status = await getEngine().getStatus({ artwork: imageProtocol !== undefined });
+      outputStatus(status, outputMode, imageProtocol);
     });
 
   program

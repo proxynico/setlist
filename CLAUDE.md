@@ -4,6 +4,9 @@ Apple Music CLI for power users and AI agents.
 
 Repo: `https://github.com/proxynico/setlist`
 
+Setlist remains maintained. Settled 24 October 2026 by Nico. Rejected: retiring
+Setlist or treating it as archived.
+
 ## What This App Is
 
 Setlist is a Bun/TypeScript command-line tool for Apple Music. It has two
@@ -62,6 +65,7 @@ src/
     errors.ts           MusicError hierarchy
     input.ts            Input parsing
     output.ts           Human, JSON, and plain output helpers
+    terminal-image.ts   Inline album art for Kitty- and iTerm2-protocol terminals
     library-audit.ts    Read-only library gardening analysis
     config.ts           Config file
     concurrency.ts      Bounded parallel map
@@ -128,7 +132,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 68 tests across 13 files
+bun test  # 77 tests across 14 files
 ```
 
 ## macOS Notes

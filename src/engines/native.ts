@@ -1,5 +1,6 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -15,6 +16,7 @@ import type {
   Device,
   DeviceKind,
   RepeatMode,
+  StatusOptions,
 } from "../lib/types";
 import { buildIdentity, resolveRawId } from "../lib/entities";
 import { ExternalServiceError, MusicError } from "../lib/errors";
@@ -117,7 +119,8 @@ async function jxaJson<T>(body: string): Promise<T> {
 }
 
 // JXA helpers for scripts that read tracks. `readTracks` bulk-reads a track
-// collection in eight Apple Events; `findPlaylist` fails clearly on unknown IDs.
+// collection in eight Apple Events; `findPlaylist` fails clearly on unknown IDs;
+// `artworkData` returns an item's first artwork as a data literal, or "".
 const JXA_HELPERS = `
 function readTracks(tracks) {
   if (tracks.length === 0) return [];
@@ -139,7 +142,44 @@ function findPlaylist(id) {
   if (matches.length === 0) throw new Error("Playlist not found: " + id);
   return matches[0];
 }
+function artworkData(item) {
+  try {
+    return item.artworks.length > 0 ? String(item.artworks[0].rawData()) : "";
+  } catch (e) {
+    return ""; // Artwork is best effort.
+  }
+}
 `;
+
+/** Music.app hands artwork to JXA as an AppleScript data literal: `'tdta'($FFD8…$)`. */
+export function decodeArtworkData(literal: string): Buffer | undefined {
+  const hex = /^'.{4}'\(\$([0-9A-Fa-f]+)\$\)$/s.exec(literal)?.[1];
+  return hex ? Buffer.from(hex, "hex") : undefined;
+}
+
+/** Save artwork as a PNG in the per-user temp dir; Music.app stores JPEG or PNG. */
+async function saveArtworkPng({
+  literal,
+  name,
+  maxPixels,
+}: {
+  literal: string;
+  name: string;
+  maxPixels?: number;
+}): Promise<string | undefined> {
+  const bytes = decodeArtworkData(literal);
+  if (!bytes) return undefined;
+  const source = join(tmpdir(), `${name}.source`);
+  const path = join(tmpdir(), `${name}.png`);
+  await Bun.write(source, bytes);
+  const resize = maxPixels ? ["-Z", String(maxPixels)] : [];
+  const result = await $`sips -s format png ${resize} ${source} --out ${path}`.quiet().nothrow();
+  await rm(source, { force: true });
+  return result.exitCode === 0 ? path : undefined;
+}
+
+// Big enough for a crisp thumbnail on a Retina terminal, small enough to send inline.
+const STATUS_ARTWORK_PIXELS = 320;
 
 interface NativeTrackData {
   persistentId: string;
@@ -308,11 +348,12 @@ export class NativeEngine implements MusicEngine {
     return normalizeRepeat(await jxa("music.songRepeat();"));
   }
 
-  async getStatus(): Promise<PlaybackState> {
-    const raw = await jxaJson<
-      Omit<PlaybackState, "track" | "repeatMode"> & {
+  async getStatus({ artwork = false }: StatusOptions = {}): Promise<PlaybackState> {
+    const { artworkLiteral, ...raw } = await jxaJson<
+      Omit<PlaybackState, "track" | "repeatMode" | "artworkPath"> & {
         track: NativeTrackData | null;
         repeatMode: string;
+        artworkLiteral: string;
       }
     >(`
       ${JXA_HELPERS}
@@ -326,13 +367,18 @@ export class NativeEngine implements MusicEngine {
         volume: music.soundVolume(),
         shuffleEnabled: music.shuffleEnabled(),
         repeatMode: music.songRepeat(),
+        artworkLiteral: active && ${artwork} ? artworkData(music.currentTrack) : "",
       };
     `);
 
+    const artworkPath = artworkLiteral
+      ? await saveArtworkPng({ literal: artworkLiteral, name: "setlist-now-playing", maxPixels: STATUS_ARTWORK_PIXELS })
+      : undefined;
     return {
       ...raw,
       track: raw.track ? parseTrack(raw.track) : null,
       repeatMode: normalizeRepeat(raw.repeatMode),
+      artworkPath,
     };
   }
 
@@ -386,25 +432,15 @@ export class NativeEngine implements MusicEngine {
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
     const persistentId = resolvePersistentId(playlistId, "Playlist");
-    const artworkPath = join(tmpdir(), `setlist-artwork-${persistentId}.png`); // tmpdir() is per-user on macOS
-    const info = await jxaJson<{ name: string; description: string; tracks: NativeTrackData[]; hasArtwork: boolean }>(`
+    const info = await jxaJson<{
+      name: string;
+      description: string;
+      tracks: NativeTrackData[];
+      artworkLiteral: string;
+    }>(`
       ${JXA_HELPERS}
       const p = findPlaylist(${JSON.stringify(persistentId)});
-      let hasArtwork = false;
-      try {
-        if (p.artworks.length > 0) {
-          const app = Application.currentApplication();
-          app.includeStandardAdditions = true;
-          const file = app.openForAccess(Path(${JSON.stringify(artworkPath)}), { writePermission: true });
-          app.setEof(file, { to: 0 });
-          app.write(p.artworks[0].rawData(), { to: file });
-          app.closeAccess(file);
-          hasArtwork = true;
-        }
-      } catch (e) {
-        // Artwork export is best effort.
-      }
-      return { name: p.name(), description: p.description() || "", tracks: readTracks(p.tracks), hasArtwork };
+      return { name: p.name(), description: p.description() || "", tracks: readTracks(p.tracks), artworkLiteral: artworkData(p) };
     `);
 
     const tracks = info.tracks.map(parseTrack);
@@ -413,7 +449,9 @@ export class NativeEngine implements MusicEngine {
       name: info.name,
       description: info.description || undefined,
       trackCount: tracks.length,
-      artworkPath: info.hasArtwork ? artworkPath : undefined,
+      artworkPath: info.artworkLiteral
+        ? await saveArtworkPng({ literal: info.artworkLiteral, name: `setlist-artwork-${persistentId}` })
+        : undefined,
       tracks,
       ...summarizePlaylistTracks(tracks),
     };

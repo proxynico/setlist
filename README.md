@@ -1,33 +1,17 @@
 # Setlist
 
-Apple Music from the command line.
+Apple Music from your terminal, for you and your AI agents.
 
-Setlist remains maintained. Settled 24 October 2026 by Nico. Rejected: retiring
-Setlist or treating it as archived.
+![Setlist in Ghostty: status with album art, a search, playing a track, and JSON output](docs/demo.gif)
 
-Setlist controls Music.app on macOS, searches Apple Music, reads your
-library, and helps audit and improve your playlists. It is built for both
-humans and agents: every command has readable terminal output plus `--json` and
-`--plain` modes for automation.
-
-It is inspired by [Spogo](https://github.com/steipete/spogo), but for Apple
-Music.
-
-## What It Does
-
-- Control playback: play, pause, skip, seek, volume, shuffle, repeat.
-- Read playback status from Music.app.
-- Search Apple Music catalog tracks, albums, artists, and playlists.
-- Browse your Apple Music library and playlists.
-- Audit your library for duplicates, orphan tracks, playlist shape, genres, and
-  theme suggestions.
-- Add or remove tracks from playlists through Music.app when using native IDs.
-- Return stable JSON for scripts and AI agents.
-
-The library-management commands are read-only. They do not delete tracks or
-modify playlists.
+Setlist plays, searches and tidies your Apple Music library from the command
+line. Every command prints readable output, or `--json` and `--plain` for
+scripts and agents. It is inspired by [Spogo](https://github.com/steipete/spogo),
+but for Apple Music.
 
 ## Install
+
+Setlist needs macOS, Music.app and [Bun](https://bun.sh).
 
 ```bash
 git clone https://github.com/proxynico/setlist.git
@@ -36,169 +20,107 @@ bun install
 bun link
 ```
 
-After linking:
+`bun run build` makes a single binary at `dist/setlist` instead.
 
-```bash
-setlist --version
-```
-
-To build a single binary:
-
-```bash
-bun run build
-```
-
-The binary is written to `dist/setlist`.
+The first command that controls Music.app makes macOS ask whether your terminal
+may control Music. Allow it.
 
 ## Quick Start
 
 ```bash
-# Current playback state
-setlist status
-
-# Playback controls
-setlist play
-setlist pause
+setlist status                       # what's playing, with album art
+setlist search track "frank ocean"
+setlist play "white ferrari"
 setlist next
-setlist prev
 setlist seek 60
-
-# Volume and modes
-setlist volume
 setlist volume 60
 setlist shuffle on
 setlist repeat all
-
-# Search
-setlist search track "radiohead"
-setlist search album "ok computer"
-setlist search artist "faye wong"
-
-# Library
-setlist library tracks
-setlist library albums
 setlist library playlists
-setlist library playlist <playlist-id>
-
-# Library gardening
-setlist library audit
-setlist library duplicates
-setlist library orphans
-setlist library themes
+setlist library audit                # duplicates, orphans, playlist shape
 ```
 
-## Output Modes
+## Album Art
 
-Every command supports three output modes:
+`setlist status` draws the current track's artwork beside it in Ghostty, Kitty,
+iTerm2 and WezTerm. Other terminals, tmux, pipes, `--json` and `--plain` get
+text only.
+
+## For Scripts and Agents
+
+Every command has three output modes:
 
 ```bash
-setlist status          # human-readable
-setlist status --json   # structured JSON
-setlist status --plain  # tab-separated output
+setlist status          # readable
+setlist status --json   # JSON
+setlist status --plain  # tab-separated, for shell pipelines
 ```
 
-Use `--json` for agents and scripts. Use `--plain` for shell pipelines.
+IDs in JSON output say where they came from, so a later command sends them back
+to the right place:
+
+| ID | Meaning |
+| --- | --- |
+| `native:persistent:ABC123` | A Music.app track or playlist |
+| `api:library:l.ABC123` | An item in your Apple Music library |
+| `api:catalog:1234567` | An item in the Apple Music catalog |
+| `native:derived:album:...` | An album or artist grouped from Music.app search results |
+
+Playlist edits (`playlist add` and `playlist remove`) take `native:persistent`
+IDs.
 
 ## Engines
 
-Setlist has three engines.
-
-| Engine | Use it for | Auth |
+| Engine | Use it for | Sign-in |
 | --- | --- | --- |
-| `native` | Music.app playback, local library, playlist edits, AirPlay devices | None |
-| `api` | Apple Music catalog and cloud library reads | Apple Music web token |
-| `auto` | Native for playback, API for catalog/library when authenticated | Optional |
+| `native` | Music.app playback, your local library, playlist edits, AirPlay devices | None |
+| `api` | Apple Music catalog search and cloud library reads | Apple Music web token |
+| `auto` | Native for playback, API for catalog and library when signed in | Optional |
 
-`auto` is the default. It does not hide API failures. If API auth exists and an
-API request fails, the real error is shown instead of silently falling back.
-IDs from `--json` output always go back to the engine that produced them.
-
-Choose an engine per command:
+`auto` is the default. When you are signed in and an API request fails, Setlist
+shows that error rather than quietly falling back to Music.app.
 
 ```bash
 setlist --engine native status
 setlist --engine api search track "new song"
-setlist --engine auto library audit
+setlist config engine auto          # change the default
+setlist config storefront auto      # or a country code such as us or hk
 ```
 
-Persist defaults:
+## Apple Music Catalog and Cloud Library
+
+Playback needs no sign-in. Catalog search and cloud-library reads need an
+Apple Music subscription and the `media-user-token` cookie from a browser signed
+in to [music.apple.com](https://music.apple.com):
 
 ```bash
-setlist config engine auto
-setlist config storefront auto
-```
-
-## Apple Music API Auth
-
-Native playback works without auth. API search and cloud-library reads need the
-`media-user-token` cookie from a browser session logged into
-`music.apple.com`.
-
-```bash
-setlist auth import --browser safari
-setlist auth import --browser chrome
-setlist auth import --browser firefox
-setlist auth token <media-user-token>
+setlist auth import --browser safari   # or chrome, firefox
+setlist auth token <media-user-token>  # paste it yourself
 setlist auth status
+setlist auth clear
 ```
 
-Tokens are stored in macOS Keychain under the `setlist` service. They are
-not written to config files.
+The token is kept in the macOS Keychain under the `setlist` service and never
+written to a file.
 
 ## Library Gardening
 
-Setlist treats your Apple Music library as a collection to maintain, not
-just a list of tracks.
+Setlist treats your library as a collection to look after, not just a list of
+tracks.
 
 ```bash
-setlist library audit --json
+setlist library audit        # the full report
+setlist library duplicates   # same song saved more than once
+setlist library orphans      # tracks that are in no playlist
+setlist library themes       # orphans that fit an existing playlist
 ```
 
-The audit reports:
+The audit covers track, album, artist and playlist counts; the largest and
+smallest playlists; top genres, artists, decades and years; duplicates; tracks
+outside every playlist; and which of those fit a playlist's genre, artists and
+era. On a big library, `--max-items 500` gives a quicker first look.
 
-- total tracks, albums, artists, and playlists
-- largest and smallest playlists
-- top genres, artists, decades, and years
-- tracks not represented in any normal playlist
-- duplicate name/artist candidates
-- exact catalog duplicate candidates
-- orphan tracks that fit existing playlist themes
-- playlist read errors, such as Apple special playlists that are listed but not
-  readable through the API
-
-Focused commands:
-
-```bash
-setlist library duplicates --json
-setlist library orphans --json
-setlist library themes --json
-```
-
-Useful limits while exploring:
-
-```bash
-setlist library audit --max-items 500
-setlist library orphans --limit 50
-setlist library themes --limit 10 --suggestions 50
-```
-
-These commands are safe review surfaces. They do not delete, remove, or add
-anything.
-
-## IDs
-
-JSON output includes source-qualified IDs so commands know what kind of entity
-they are handling.
-
-| Format | Meaning |
-| --- | --- |
-| `native:persistent:ABC123` | Music.app persistent ID |
-| `api:library:l.ABC123` | Apple Music library ID |
-| `api:catalog:1234567` | Apple Music catalog ID |
-| `native:derived:album:...` | Derived native search result |
-
-Native-only mutation commands, such as playlist add/remove, require native
-persistent IDs.
+These commands only read. They never delete, move or add anything.
 
 ## Commands
 
@@ -210,9 +132,8 @@ Search:      search track|album|artist|playlist|all <query> [-l limit]
 Library:     library tracks|albums|playlists | library playlist <id>
 Gardening:   library audit|duplicates|orphans|themes
 Playlists:   playlist info <id> | playlist add <id> <trackIds...> | playlist remove <id> <trackIds...>
-Queue:       queue add <trackId>   (fails explicitly; reliable queueing is not implemented)
 Devices:     devices
-Auth:        auth import|token|status|clear
+Sign-in:     auth import|token|status|clear
 Config:      config status | config engine [native|api|auto] | config storefront [code|auto]
 ```
 
@@ -223,55 +144,16 @@ Global flags:
 --plain        Tab-separated output
 --no-color     Disable color output
 --engine <e>   native | api | auto
--v, --verbose  Show the underlying cause/stack when a command fails
+-v, --verbose  Show the underlying cause when a command fails
 ```
-
-## Requirements
-
-- macOS
-- Music.app
-- Bun
-- Apple Music subscription for API catalog/library features
-
-Music.app scripting requires macOS Automation permission for the app running
-the command, usually Terminal, iTerm, Codex, or another shell host.
-
-If Music.app works from a normal terminal but fails inside a Codex/cmux session,
-run the whole command through the GUI user session:
-
-```bash
-launchctl asuser "$(id -u)" bun run src/index.ts status --json
-```
-
-Do not wrap only `osascript` inside `launchctl asuser`; launch the whole CLI
-that way.
 
 ## Development
 
 ```bash
 bun install
-bun run src/index.ts status
-bun run typecheck
-bun test
-bun run check
+bun run check   # Biome, typecheck and tests
 bun run build
 ```
-
-Current test suite:
-
-```bash
-bun test  # 68 tests across 13 files
-```
-
-## Design Rules
-
-- Preserve human, `--json`, and `--plain` output for every command.
-- Keep IDs source-qualified.
-- Store tokens only in Keychain.
-- Use structured `MusicError` errors and output helpers.
-- Keep library gardening read-only until an explicit apply/review flow exists.
-- Queue management intentionally fails because reliable Music.app queueing is
-  not implemented.
 
 ## License
 
