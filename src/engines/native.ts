@@ -16,10 +16,11 @@ import type {
   Device,
   DeviceKind,
   RepeatMode,
+  Replay,
   StatusOptions,
 } from "../lib/types";
 import { buildIdentity, resolveRawId } from "../lib/entities";
-import { ExternalServiceError, MusicError } from "../lib/errors";
+import { ExternalServiceError, MusicError, UnsupportedOperationError } from "../lib/errors";
 import { summarizePlaylistTracks } from "../lib/library-audit";
 
 /**
@@ -494,6 +495,13 @@ export class NativeEngine implements MusicEngine {
       for (const track of tracks) track.delete();
     `,
       { retry: false },
+    );
+  }
+
+  async getReplay(): Promise<Replay> {
+    throw new UnsupportedOperationError(
+      "Replay needs the Apple Music API.",
+      "Sign in with `setlist auth import --browser safari`, then use `--engine auto` or `--engine api`.",
     );
   }
 

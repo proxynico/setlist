@@ -7,6 +7,7 @@ import type {
   SearchResults,
   SearchType,
   RepeatMode,
+  Replay,
   StatusOptions,
 } from "../lib/types";
 import { NativeEngine } from "./native";
@@ -111,5 +112,10 @@ export class AutoEngine implements MusicEngine {
 
   async getLibraryAlbums(limit?: number, offset?: number): Promise<Album[]> {
     return (await this.reader()).getLibraryAlbums(limit, offset);
+  }
+
+  // Replay lives only in the Apple Music API; without sign-in, native explains how to get it.
+  async getReplay(year?: number): Promise<Replay> {
+    return (await this.reader()).getReplay(year);
   }
 }

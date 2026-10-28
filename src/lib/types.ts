@@ -79,6 +79,23 @@ export interface SearchResults {
   playlists: Playlist[];
 }
 
+export interface ReplayYear {
+  year: number;
+  // Apple fills in the totals once a year's Replay is final.
+  listenMinutes?: number;
+  songs?: number;
+  artists?: number;
+  albums?: number;
+  genres?: number;
+  playlistId?: string; // the year's "Replay Your Top Songs" catalog playlist
+}
+
+export interface Replay {
+  year: ReplayYear;
+  years: ReplayYear[]; // newest first
+  topSongs: Track[]; // in Replay order
+}
+
 export type DeviceKind = "airplay" | "bluetooth" | "computer" | "unknown";
 
 export interface Device {
@@ -122,6 +139,9 @@ export interface MusicEngine {
 
   // Devices
   getDevices(): Promise<Device[]>;
+
+  // Listening history
+  getReplay(year?: number): Promise<Replay>;
 }
 
 export type SearchType = "track" | "album" | "artist" | "playlist";

@@ -55,6 +55,7 @@ describe("MCP server", () => {
       "playlist",
       "playlist_add",
       "playlist_remove",
+      "replay",
       "search",
       "seek",
       "set_repeat",
