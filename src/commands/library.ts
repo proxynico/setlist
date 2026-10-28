@@ -1,34 +1,69 @@
 import type { Command } from "commander";
-import type { MusicEngine } from "../lib/types";
+import type { MusicEngine, OutputMode } from "../lib/types";
 import { parseInteger } from "../lib/input";
-import { analyzeLibrarySnapshot, collectLibrarySnapshot } from "../lib/library-audit";
+import { type LibraryAudit, analyzeLibrarySnapshot, collectLibrarySnapshot } from "../lib/library-audit";
 import {
   getOutputMode,
   outputTracks,
   outputAlbums,
   outputPlaylists,
   outputPlaylistDetails,
-  outputJson,
-  outputMessage,
+  outputAction,
   outputLibraryAudit,
   outputLibraryDuplicates,
   outputLibraryOrphans,
   outputLibraryThemes,
 } from "../lib/output";
 
-export function registerLibraryCommands(program: Command, getEngine: () => MusicEngine) {
-  const library = program.command("library").alias("lib").description("Browse your music library");
+interface AuditOptions {
+  maxItems: string;
+  suggestions?: string;
+  limit?: string;
+}
 
-  async function buildAudit(opts: { pageSize?: string; maxItems?: string; suggestions?: string } = {}) {
-    const engine = getEngine();
-    const snapshot = await collectLibrarySnapshot(engine, {
-      pageSize: parseInteger("page size", opts.pageSize ?? "100", { min: 1, max: 100 }),
-      maxItems: parseInteger("max items", opts.maxItems ?? "20000", { min: 1 }),
-    });
-    return analyzeLibrarySnapshot(snapshot, {
-      suggestionsPerTheme: parseInteger("suggestions", opts.suggestions ?? "20", { min: 1 }),
-    });
-  }
+interface AuditCommand {
+  command: string;
+  description: string;
+  defaultLimit?: { value: string; description: string };
+  defaultSuggestions?: string; // only commands that show theme suggestions take --suggestions
+  output: (audit: LibraryAudit, mode: OutputMode, limit: number) => void;
+}
+
+const AUDIT_COMMANDS: AuditCommand[] = [
+  {
+    command: "audit",
+    description: "Read-only library audit: counts, genres, playlists, duplicates, orphans, and theme suggestions",
+    defaultSuggestions: "20",
+    output: (audit, mode) => outputLibraryAudit(audit, mode),
+  },
+  {
+    command: "duplicates",
+    description: "Show read-only duplicate candidates",
+    defaultLimit: { value: "25", description: "Max duplicate buckets per type" },
+    output: outputLibraryDuplicates,
+  },
+  {
+    command: "orphans",
+    description: "Show tracks that are not represented in any normal playlist",
+    defaultLimit: { value: "100", description: "Max tracks to output" },
+    output: outputLibraryOrphans,
+  },
+  {
+    command: "themes",
+    description: "Suggest orphan tracks that fit existing playlist themes",
+    defaultLimit: { value: "20", description: "Max suggestions per playlist to output" },
+    defaultSuggestions: "50",
+    output: outputLibraryThemes,
+  },
+];
+
+export function registerLibraryCommands(program: Command, getEngine: () => MusicEngine) {
+  const mode = () => getOutputMode(program.opts());
+
+  const listTracks = async (id: string) => outputTracks(await getEngine().getPlaylistTracks(id), mode());
+  const listPlaylists = async () => outputPlaylists(await getEngine().getPlaylists(), mode());
+
+  const library = program.command("library").alias("lib").description("Browse your music library");
 
   library
     .command("tracks")
@@ -36,14 +71,12 @@ export function registerLibraryCommands(program: Command, getEngine: () => Music
     .description("List library tracks")
     .option("-l, --limit <n>", "Max results", "50")
     .option("-o, --offset <n>", "Offset", "0")
-    .action(async (opts) => {
-      const engine = getEngine();
-      const tracks = await engine.getLibraryTracks(
+    .action(async (opts: { limit: string; offset: string }) => {
+      const tracks = await getEngine().getLibraryTracks(
         parseInteger("limit", opts.limit, { min: 1 }),
         parseInteger("offset", opts.offset, { min: 0 }),
       );
-      const mode = getOutputMode(program.opts());
-      outputTracks(tracks, mode);
+      outputTracks(tracks, mode());
     });
 
   library
@@ -51,143 +84,77 @@ export function registerLibraryCommands(program: Command, getEngine: () => Music
     .description("List library albums")
     .option("-l, --limit <n>", "Max results", "50")
     .option("-o, --offset <n>", "Offset", "0")
-    .action(async (opts) => {
-      const engine = getEngine();
-      const albums = await engine.getLibraryAlbums(
+    .action(async (opts: { limit: string; offset: string }) => {
+      const albums = await getEngine().getLibraryAlbums(
         parseInteger("limit", opts.limit, { min: 1 }),
         parseInteger("offset", opts.offset, { min: 0 }),
       );
-      const mode = getOutputMode(program.opts());
-      outputAlbums(albums, mode);
+      outputAlbums(albums, mode());
     });
 
-  library
-    .command("playlists")
-    .description("List your playlists")
-    .action(async () => {
-      const engine = getEngine();
-      const playlists = await engine.getPlaylists();
-      const mode = getOutputMode(program.opts());
-      outputPlaylists(playlists, mode);
+  library.command("playlists").description("List your playlists").action(listPlaylists);
+  library.command("playlist <id>").description("Show tracks in a playlist").action(listTracks);
+
+  // ── Library gardening (read-only) ──
+
+  for (const spec of AUDIT_COMMANDS) {
+    const command = library.command(spec.command).description(spec.description);
+    if (spec.defaultLimit) command.option("-l, --limit <n>", spec.defaultLimit.description, spec.defaultLimit.value);
+    command.option("--max-items <n>", "Max library tracks/albums to scan", "20000");
+    if (spec.defaultSuggestions) {
+      command.option("--suggestions <n>", "Theme suggestions to compute per playlist", spec.defaultSuggestions);
+    }
+    command.action(async (opts: AuditOptions) => {
+      const snapshot = await collectLibrarySnapshot(getEngine(), {
+        maxItems: parseInteger("max items", opts.maxItems, { min: 1 }),
+      });
+      const audit = analyzeLibrarySnapshot(snapshot, {
+        suggestionsPerTheme: parseInteger("suggestions", opts.suggestions ?? "20", { min: 1 }),
+      });
+      const limit = opts.limit === undefined ? Number.POSITIVE_INFINITY : parseInteger("limit", opts.limit, { min: 1 });
+      spec.output(audit, mode(), limit);
     });
+  }
 
-  library
-    .command("playlist <id>")
-    .description("Show tracks in a playlist")
-    .action(async (id: string) => {
-      const engine = getEngine();
-      const tracks = await engine.getPlaylistTracks(id);
-      const mode = getOutputMode(program.opts());
-      outputTracks(tracks, mode);
-    });
+  // ── Playlists ──
 
-  library
-    .command("audit")
-    .description("Read-only library audit: counts, genres, playlists, duplicates, orphans, and theme suggestions")
-    .option("--page-size <n>", "Library page size", "100")
-    .option("--max-items <n>", "Max library tracks/albums to scan", "20000")
-    .option("--suggestions <n>", "Theme suggestions per playlist", "20")
-    .action(async (opts) => {
-      const audit = await buildAudit(opts);
-      const mode = getOutputMode(program.opts());
-      outputLibraryAudit(audit, mode);
-    });
+  const playlist = program.command("playlist").alias("pl").description("Playlist management");
 
-  library
-    .command("duplicates")
-    .description("Show read-only duplicate candidates")
-    .option("-l, --limit <n>", "Max duplicate buckets per type", "25")
-    .option("--page-size <n>", "Library page size", "100")
-    .option("--max-items <n>", "Max library tracks/albums to scan", "20000")
-    .action(async (opts) => {
-      const audit = await buildAudit(opts);
-      const mode = getOutputMode(program.opts());
-      outputLibraryDuplicates(audit, mode, parseInteger("limit", opts.limit, { min: 1 }));
-    });
-
-  library
-    .command("orphans")
-    .description("Show tracks that are not represented in any normal playlist")
-    .option("-l, --limit <n>", "Max tracks to output", "100")
-    .option("--page-size <n>", "Library page size", "100")
-    .option("--max-items <n>", "Max library tracks/albums to scan", "20000")
-    .action(async (opts) => {
-      const audit = await buildAudit(opts);
-      const mode = getOutputMode(program.opts());
-      outputLibraryOrphans(audit, mode, parseInteger("limit", opts.limit, { min: 1 }));
-    });
-
-  library
-    .command("themes")
-    .description("Suggest orphan tracks that fit existing playlist themes")
-    .option("-l, --limit <n>", "Max suggestions per playlist to output", "20")
-    .option("--page-size <n>", "Library page size", "100")
-    .option("--max-items <n>", "Max library tracks/albums to scan", "20000")
-    .option("--suggestions <n>", "Candidates to compute per playlist", "50")
-    .action(async (opts) => {
-      const audit = await buildAudit(opts);
-      const mode = getOutputMode(program.opts());
-      outputLibraryThemes(audit, mode, parseInteger("limit", opts.limit, { min: 1 }));
-    });
-
-  // ── Playlist info (details, artwork, description, stats) ──
-
-  const pl = program.command("playlist").alias("pl").description("Playlist management");
-
-  pl.command("info <id>")
+  playlist
+    .command("info <id>")
     .description("Show playlist details: description, artwork, top artists, genres")
     .action(async (id: string) => {
-      const engine = getEngine();
-      const details = await engine.getPlaylistInfo(id);
-      const mode = getOutputMode(program.opts());
-      outputPlaylistDetails(details, mode);
+      outputPlaylistDetails(await getEngine().getPlaylistInfo(id), mode());
     });
 
-  // ── Playlist editing ──
-
-  pl.command("add <playlistId> <trackIds...>")
+  playlist
+    .command("add <playlistId> <trackIds...>")
     .description("Add one or more tracks to a playlist by their persistent IDs")
     .action(async (playlistId: string, trackIds: string[]) => {
-      const engine = getEngine();
-      const mode = getOutputMode(program.opts());
-      await engine.addToPlaylist(playlistId, trackIds);
-      if (mode === "json") {
-        outputJson({ action: "playlist_add", playlistId, trackIds, count: trackIds.length });
-      } else if (mode !== "plain") {
-        outputMessage(`Added ${trackIds.length} track${trackIds.length === 1 ? "" : "s"} to playlist`);
-      }
+      await getEngine().addToPlaylist(playlistId, trackIds);
+      outputAction(
+        mode(),
+        { action: "playlist_add", playlistId, trackIds, count: trackIds.length },
+        `Added ${trackIds.length} track${trackIds.length === 1 ? "" : "s"} to playlist`,
+      );
     });
 
-  pl.command("remove <playlistId> <trackIds...>")
+  playlist
+    .command("remove <playlistId> <trackIds...>")
     .alias("rm")
     .description("Remove one or more tracks from a playlist by their persistent IDs")
     .action(async (playlistId: string, trackIds: string[]) => {
-      const engine = getEngine();
-      const mode = getOutputMode(program.opts());
-      await engine.removeFromPlaylist(playlistId, trackIds);
-      if (mode === "json") {
-        outputJson({ action: "playlist_remove", playlistId, trackIds, count: trackIds.length });
-      } else if (mode !== "plain") {
-        outputMessage(`Removed ${trackIds.length} track${trackIds.length === 1 ? "" : "s"} from playlist`);
-      }
+      await getEngine().removeFromPlaylist(playlistId, trackIds);
+      outputAction(
+        mode(),
+        { action: "playlist_remove", playlistId, trackIds, count: trackIds.length },
+        `Removed ${trackIds.length} track${trackIds.length === 1 ? "" : "s"} from playlist`,
+      );
     });
 
-  pl.command("tracks <id>")
+  playlist
+    .command("tracks <id>")
     .description("List tracks in a playlist (alias for library playlist)")
-    .action(async (id: string) => {
-      const engine = getEngine();
-      const tracks = await engine.getPlaylistTracks(id);
-      const mode = getOutputMode(program.opts());
-      outputTracks(tracks, mode);
-    });
-
-  pl.command("list")
-    .alias("ls")
-    .description("List all playlists")
-    .action(async () => {
-      const engine = getEngine();
-      const playlists = await engine.getPlaylists();
-      const mode = getOutputMode(program.opts());
-      outputPlaylists(playlists, mode);
-    });
+    .action(listTracks);
+  playlist.command("list").alias("ls").description("List all playlists").action(listPlaylists);
 }

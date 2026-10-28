@@ -24,7 +24,7 @@ export interface Track extends EntityIdentity {
 export interface Album extends EntityIdentity {
   name: string;
   artist: string;
-  trackCount: number;
+  trackCount?: number; // absent when the source doesn't report it
   year?: number;
   genre?: string;
   artworkUrl?: string;
@@ -39,18 +39,24 @@ export interface Artist extends EntityIdentity {
 export interface Playlist extends EntityIdentity {
   name: string;
   description?: string;
-  trackCount: number;
-  duration?: number;
+  trackCount?: number; // absent when the source doesn't report it
   artworkPath?: string; // local file path for native engine
   artworkUrl?: string; // URL for API engine
+}
+
+export interface CountedValue {
+  name: string;
+  count: number;
 }
 
 export interface PlaylistDetails extends Playlist {
   tracks: Track[];
   totalDuration: number; // seconds
-  topArtists: { name: string; count: number }[];
-  genres: { name: string; count: number }[];
+  topArtists: CountedValue[];
+  genres: CountedValue[];
 }
+
+export type RepeatMode = "off" | "one" | "all";
 
 export interface PlaybackState {
   state: "playing" | "paused" | "stopped";
@@ -58,7 +64,7 @@ export interface PlaybackState {
   position: number; // seconds
   volume: number; // 0-100
   shuffleEnabled: boolean;
-  repeatMode: "off" | "one" | "all";
+  repeatMode: RepeatMode;
 }
 
 export interface SearchResults {
@@ -77,23 +83,9 @@ export interface Device {
   active: boolean;
 }
 
-export interface EngineCapabilities {
-  playback: boolean;
-  queue: boolean;
-  playlistMutation: boolean;
-  devices: boolean;
-  catalogSearch: boolean;
-  libraryRead: boolean;
-  shuffle: boolean;
-  repeat: boolean;
-}
-
 // ── Engine interface ──
 
 export interface MusicEngine {
-  name: string;
-  capabilities: EngineCapabilities;
-
   // Playback
   play(query?: string): Promise<void>;
   pause(): Promise<void>;
@@ -105,15 +97,12 @@ export interface MusicEngine {
   getVolume(): Promise<number>;
   setShuffle(enabled: boolean): Promise<void>;
   getShuffle(): Promise<boolean>;
-  setRepeat(mode: "off" | "one" | "all"): Promise<void>;
-  getRepeat(): Promise<"off" | "one" | "all">;
+  setRepeat(mode: RepeatMode): Promise<void>;
+  getRepeat(): Promise<RepeatMode>;
   getStatus(): Promise<PlaybackState>;
 
   // Search
   search(query: string, types: SearchType[], limit?: number): Promise<SearchResults>;
-
-  // Queue
-  addToQueue(trackId: string): Promise<void>;
 
   // Library
   getPlaylists(): Promise<Playlist[]>;
@@ -134,16 +123,10 @@ export type SearchType = "track" | "album" | "artist" | "playlist";
 
 export type OutputMode = "human" | "json" | "plain";
 
-export interface GlobalOptions {
-  json: boolean;
-  plain: boolean;
-  noColor: boolean;
-  verbose: boolean;
-  engine: "native" | "api" | "auto";
-}
+export const ENGINE_NAMES = ["native", "api", "auto"] as const;
+export type EngineName = (typeof ENGINE_NAMES)[number];
 
 export interface CliConfig {
-  defaultEngine: "native" | "api" | "auto";
-  browser?: string;
-  storefront?: string;
+  defaultEngine: EngineName;
+  storefront: string; // two-letter country code, or "auto"
 }

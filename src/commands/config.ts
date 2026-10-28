@@ -1,13 +1,13 @@
-import type { Command } from "commander";
-import { loadConfig, setDefaultEngine, setStorefront } from "../lib/config";
+import { Argument, type Command } from "commander";
+import { loadConfig, updateConfig } from "../lib/config";
 import { ValidationError } from "../lib/errors";
-import { getOutputMode, outputJson, outputKeyValue, outputMessage } from "../lib/output";
-import type { CliConfig } from "../lib/types";
+import { getOutputMode, outputAction, outputJson, outputKeyValue, outputValue } from "../lib/output";
+import { ENGINE_NAMES, type EngineName } from "../lib/types";
 
-const ENGINES: CliConfig["defaultEngine"][] = ["native", "api", "auto"];
 const STOREFRONT_PATTERN = /^[a-z]{2}$/;
 
 export function registerConfigCommands(program: Command) {
+  const mode = () => getOutputMode(program.opts());
   const config = program.command("config").description("Manage runtime defaults");
 
   config
@@ -15,57 +15,37 @@ export function registerConfigCommands(program: Command) {
     .description("Show current defaults")
     .action(async () => {
       const current = await loadConfig();
-      const mode = getOutputMode(program.opts());
-      if (mode === "json") {
+      const output = mode();
+      if (output === "json") {
         outputJson(current);
-      } else if (mode === "plain") {
+      } else if (output === "plain") {
         console.log(`default_engine\t${current.defaultEngine}`);
-        console.log(`storefront\t${current.storefront ?? "auto"}`);
+        console.log(`storefront\t${current.storefront}`);
       } else {
         outputKeyValue("Default engine", current.defaultEngine);
-        outputKeyValue("Storefront", current.storefront ?? "auto");
+        outputKeyValue("Storefront", current.storefront);
       }
     });
 
   config
-    .command("engine [engine]")
+    .command("engine")
     .description("Get or set the default engine")
-    .action(async (engine?: string) => {
-      const mode = getOutputMode(program.opts());
+    .addArgument(new Argument("[engine]").choices(ENGINE_NAMES))
+    .action(async (engine?: EngineName) => {
       if (!engine) {
-        const current = await loadConfig();
-        if (mode === "json") {
-          outputJson({ defaultEngine: current.defaultEngine });
-        } else {
-          console.log(current.defaultEngine);
-        }
+        outputValue(mode(), "defaultEngine", (await loadConfig()).defaultEngine, "Default engine");
         return;
       }
-
-      if (!ENGINES.includes(engine as CliConfig["defaultEngine"])) {
-        throw new ValidationError(`engine must be one of: ${ENGINES.join(", ")}`);
-      }
-
-      await setDefaultEngine(engine as CliConfig["defaultEngine"]);
-      if (mode === "json") {
-        outputJson({ defaultEngine: engine });
-      } else {
-        outputMessage(`Default engine set to ${engine}`);
-      }
+      await updateConfig({ defaultEngine: engine });
+      outputAction(mode(), { defaultEngine: engine }, `Default engine set to ${engine}`);
     });
 
   config
     .command("storefront [storefront]")
     .description("Get or set the Apple Music storefront (or use 'auto')")
     .action(async (storefront?: string) => {
-      const mode = getOutputMode(program.opts());
       if (!storefront) {
-        const current = await loadConfig();
-        if (mode === "json") {
-          outputJson({ storefront: current.storefront ?? "auto" });
-        } else {
-          console.log(current.storefront ?? "auto");
-        }
+        outputValue(mode(), "storefront", (await loadConfig()).storefront, "Storefront");
         return;
       }
 
@@ -74,11 +54,7 @@ export function registerConfigCommands(program: Command) {
         throw new ValidationError("storefront must be 'auto' or a two-letter country code, e.g. us, gb, jp");
       }
 
-      await setStorefront(normalized);
-      if (mode === "json") {
-        outputJson({ storefront: normalized });
-      } else {
-        outputMessage(`Storefront set to ${normalized}`);
-      }
+      await updateConfig({ storefront: normalized });
+      outputAction(mode(), { storefront: normalized }, `Storefront set to ${normalized}`);
     });
 }
