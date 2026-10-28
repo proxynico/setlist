@@ -260,7 +260,7 @@ bun run build
 Current test suite:
 
 ```bash
-bun test  # 67 tests across 13 files
+bun test  # 68 tests across 13 files
 ```
 
 ## Design Rules

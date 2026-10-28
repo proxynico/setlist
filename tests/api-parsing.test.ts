@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 // exported helpers they depend on and verify the contract via the entity system.
 import { buildIdentity } from "../src/lib/entities";
 import { ApiEngine, findDeveloperToken } from "../src/engines/api";
-import { AuthError, UnsupportedOperationError, ValidationError } from "../src/lib/errors";
+import { AuthError, MusicError, UnsupportedOperationError, ValidationError } from "../src/lib/errors";
 
 describe("API response field extraction contract", () => {
   test("buildIdentity prefers libraryId for API library entities", () => {
@@ -155,6 +155,25 @@ describe("API pagination", () => {
       "/me/library/playlists/l.playlist/tracks?limit=100",
       "/me/library/playlists/l.playlist/tracks?offset=100&limit=100",
     ]);
+  });
+
+  test("keeps fetched playlist tracks when a later next link 404s", async () => {
+    const engine = new ApiEngine({
+      request: async <T>(path: string, params?: Record<string, string>): Promise<T> => {
+        if (path !== "/me/library/playlists/l.playlist/tracks") throw new Error(`unexpected request: ${path}`);
+        if (params?.offset === "100") throw new MusicError("Apple Music API error: 404", { code: "not_found" });
+        const data = Array.from({ length: 100 }, (_, i) => ({
+          id: `l.${i}`,
+          type: "library-songs",
+          attributes: { name: "Song", artistName: "A", albumName: "B", durationInMillis: 1000 },
+        }));
+        return { data, next: "/v1/me/library/playlists/l.playlist/tracks?offset=100" } as T;
+      },
+    });
+
+    const tracks = await engine.getPlaylistTracks("api:library:l.playlist");
+
+    expect(tracks).toHaveLength(100);
   });
 });
 

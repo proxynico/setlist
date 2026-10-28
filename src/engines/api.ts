@@ -401,13 +401,7 @@ export class ApiEngine implements MusicEngine {
       }
       if (offsets.length >= MAX_PAGES) throw tooManyPages();
       const pages = await mapConcurrent(offsets, PAGE_CONCURRENCY, (offset) =>
-        this.request<AMResponse>(path, { ...params, offset: String(offset), limit: String(limit) }).catch(
-          (err: unknown): AMResponse => {
-            // The collection shrank since page 1, so this page is past the end.
-            if (isNotFound(err)) return {};
-            throw err;
-          },
-        ),
+        this.requestLaterPage(path, { ...params, offset: String(offset), limit: String(limit) }),
       );
       for (const page of pages) resources.push(...(page.data ?? []));
       return resources.slice(0, maxItems);
@@ -418,11 +412,19 @@ export class ApiEngine implements MusicEngine {
     for (let pageCount = 1; next && resources.length < maxItems; pageCount++) {
       if (pageCount >= MAX_PAGES) throw tooManyPages();
       const page = parseNextPage(next, String(limit));
-      const data = await this.request<AMResponse>(page.path, page.params);
+      const data = await this.requestLaterPage(page.path, page.params);
       resources.push(...(data.data ?? []));
       next = data.next;
     }
     return resources.slice(0, maxItems);
+  }
+
+  /** A later page that 404s is past the end because the collection shrank since page 1. */
+  private requestLaterPage(path: string, params: Record<string, string>): Promise<AMResponse> {
+    return this.request<AMResponse>(path, params).catch((err: unknown): AMResponse => {
+      if (isNotFound(err)) return {};
+      throw err;
+    });
   }
 
   // ── Playback: the Apple Music API has no playback control ──
@@ -481,8 +483,8 @@ export class ApiEngine implements MusicEngine {
       return (await this.requestPages(`${path}/tracks`, {})).map(parseApiTrack);
     } catch (err) {
       if (!isNotFound(err)) throw err;
-      // Apple answers 404 both for an empty playlist's tracks and for an unknown
-      // playlist; fetching the playlist itself fails only in the second case.
+      // A first-page 404 means an empty playlist or an unknown one; fetching the
+      // playlist itself fails only in the second case.
       await this.request<AMResponse>(path);
       return [];
     }
