@@ -142,7 +142,7 @@ export function summarizePlaylistTracks(
   tracks: Track[],
 ): Pick<PlaylistDetails, "totalDuration" | "topArtists" | "genres"> {
   return {
-    totalDuration: tracks.reduce((sum, track) => sum + track.duration, 0),
+    totalDuration: Math.round(tracks.reduce((sum, track) => sum + track.duration, 0)),
     topArtists: top(countBy(tracks, artistOf), 15),
     genres: top(countBy(tracks, genreOf), 10),
   };

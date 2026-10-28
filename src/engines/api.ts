@@ -344,6 +344,17 @@ function parseNextPage(next: string, limit: string): ApiPage {
   };
 }
 
+function isNotFound(err: unknown): boolean {
+  return isMusicError(err) && err.code === "not_found";
+}
+
+function tooManyPages(): ExternalServiceError {
+  return new ExternalServiceError(
+    `Apple Music API pagination exceeded ${MAX_PAGES} pages.`,
+    "The API returned too many continuation links; try a lower limit.",
+  );
+}
+
 function nativeOnly(feature: string): () => Promise<never> {
   return async () => {
     throw new UnsupportedOperationError(
@@ -382,27 +393,30 @@ export class ApiEngine implements MusicEngine {
     const resources = [...(first.data ?? [])];
     const total = first.meta?.total;
 
-    if (typeof total === "number") {
+    if (typeof total === "number" && resources.length === limit) {
       const start = Number(params.offset ?? 0);
       const offsets: number[] = [];
-      for (let offset = start + limit; offset < Math.min(total, start + maxItems); offset += limit)
+      for (let offset = start + limit; offset < Math.min(total, start + maxItems); offset += limit) {
         offsets.push(offset);
+      }
+      if (offsets.length >= MAX_PAGES) throw tooManyPages();
       const pages = await mapConcurrent(offsets, PAGE_CONCURRENCY, (offset) =>
-        this.request<AMResponse>(path, { ...params, offset: String(offset), limit: String(limit) }),
+        this.request<AMResponse>(path, { ...params, offset: String(offset), limit: String(limit) }).catch(
+          (err: unknown): AMResponse => {
+            // The collection shrank since page 1, so this page is past the end.
+            if (isNotFound(err)) return {};
+            throw err;
+          },
+        ),
       );
       for (const page of pages) resources.push(...(page.data ?? []));
       return resources.slice(0, maxItems);
     }
 
-    // No total reported: follow Apple's next links one page at a time.
+    // No total, or a short first page: follow Apple's next links one page at a time.
     let next = first.next;
     for (let pageCount = 1; next && resources.length < maxItems; pageCount++) {
-      if (pageCount >= MAX_PAGES) {
-        throw new ExternalServiceError(
-          `Apple Music API pagination exceeded ${MAX_PAGES} pages.`,
-          "The API returned too many continuation links; try a lower limit.",
-        );
-      }
+      if (pageCount >= MAX_PAGES) throw tooManyPages();
       const page = parseNextPage(next, String(limit));
       const data = await this.request<AMResponse>(page.path, page.params);
       resources.push(...(data.data ?? []));
@@ -462,13 +476,15 @@ export class ApiEngine implements MusicEngine {
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
-    const id = resolveApiLibraryId(playlistId, "Playlist");
+    const path = `/me/library/playlists/${encodeURIComponent(resolveApiLibraryId(playlistId, "Playlist"))}`;
     try {
-      return (await this.requestPages(`/me/library/playlists/${encodeURIComponent(id)}/tracks`, {})).map(parseApiTrack);
+      return (await this.requestPages(`${path}/tracks`, {})).map(parseApiTrack);
     } catch (err) {
-      // Apple answers 404 for the tracks of an empty playlist.
-      if (isMusicError(err) && err.code === "not_found") return [];
-      throw err;
+      if (!isNotFound(err)) throw err;
+      // Apple answers 404 both for an empty playlist's tracks and for an unknown
+      // playlist; fetching the playlist itself fails only in the second case.
+      await this.request<AMResponse>(path);
+      return [];
     }
   }
 

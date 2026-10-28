@@ -1,5 +1,7 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   MusicEngine,
   Track,
@@ -90,11 +92,14 @@ function scriptError(stderr: string, cause?: unknown): ExternalServiceError {
   return new ExternalServiceError(`Music.app: ${message || stderr}`);
 }
 
-/** Run a JXA script with `music` bound to Music.app; launch Music.app and retry once if it isn't ready. */
-async function jxa(body: string): Promise<string> {
+/**
+ * Run a JXA script with `music` bound to Music.app; launch Music.app and retry once if it isn't ready.
+ * Edits launch Music.app first and pass `retry: false`, since a retry could repeat a partial edit.
+ */
+async function jxa(body: string, { retry = true } = {}): Promise<string> {
   const script = `const music = ${MUSIC_APP};\n${body}`;
   let result = await osascript(script);
-  if (!result.ok && shouldRetryAfterMusicError(result.stderr)) {
+  if (!result.ok && retry && shouldRetryAfterMusicError(result.stderr)) {
     try {
       await ensureMusicRunning();
     } catch (launchErr) {
@@ -381,7 +386,7 @@ export class NativeEngine implements MusicEngine {
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
     const persistentId = resolvePersistentId(playlistId, "Playlist");
-    const artworkPath = `/tmp/setlist-artwork-${persistentId}.png`;
+    const artworkPath = join(tmpdir(), `setlist-artwork-${persistentId}.png`); // tmpdir() is per-user on macOS
     const info = await jxaJson<{ name: string; description: string; tracks: NativeTrackData[]; hasArtwork: boolean }>(`
       ${JXA_HELPERS}
       const p = findPlaylist(${JSON.stringify(persistentId)});
@@ -418,7 +423,9 @@ export class NativeEngine implements MusicEngine {
     const playlist = resolvePersistentId(playlistId, "Playlist");
     const tracks = trackIds.map((id) => resolvePersistentId(id, "Track"));
     // Resolve every track before adding any, so a bad ID leaves the playlist unchanged.
-    await jxa(`
+    await ensureMusicRunning();
+    await jxa(
+      `
       ${JXA_HELPERS}
       const playlist = findPlaylist(${JSON.stringify(playlist)});
       const library = music.libraryPlaylists[0];
@@ -428,13 +435,17 @@ export class NativeEngine implements MusicEngine {
         return matches[0];
       });
       for (const track of tracks) music.duplicate(track, { to: playlist });
-    `);
+    `,
+      { retry: false },
+    );
   }
 
   async removeFromPlaylist(playlistId: string, trackIds: string[]): Promise<void> {
     const playlist = resolvePersistentId(playlistId, "Playlist");
     const tracks = trackIds.map((id) => resolvePersistentId(id, "Track"));
-    await jxa(`
+    await ensureMusicRunning();
+    await jxa(
+      `
       ${JXA_HELPERS}
       const playlist = findPlaylist(${JSON.stringify(playlist)});
       const tracks = ${JSON.stringify(tracks)}.map((id) => {
@@ -443,7 +454,9 @@ export class NativeEngine implements MusicEngine {
         return matches[0];
       });
       for (const track of tracks) track.delete();
-    `);
+    `,
+      { retry: false },
+    );
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
