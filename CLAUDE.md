@@ -24,6 +24,7 @@ orphan tracks, playlist shape, and theme suggestions.
 - Runtime: Bun
 - Language: TypeScript, strict mode
 - CLI framework: Commander.js
+- MCP: `@modelcontextprotocol/sdk` with zod input schemas
 - Lint/format: Biome (`bun run check` runs it first)
 - Native control: Music.app JXA through `osascript`
 - API reads: `amp-api.music.apple.com`
@@ -53,12 +54,14 @@ src/
     library.ts          tracks, albums, playlists, audit, duplicates, orphans, themes
     auth.ts             auth import|token|status|clear
     config.ts           config status|engine|storefront
+    mcp.ts              mcp: stdio MCP server command
     devices.ts          AirPlay device listing
     queue.ts            queue add, explicit unsupported operation
   engines/
     native.ts           Music.app JXA engine
     api.ts              Apple Music API engine
     auto.ts             Native/API router
+  mcp.ts                MCP tools over the engines; results reuse the --json shapes
   lib/
     types.ts            Domain types and MusicEngine interface
     entities.ts         Source-qualified entity IDs and validation
@@ -90,6 +93,7 @@ Gardening:   library audit|duplicates|orphans|themes
 Playlists:   playlist info <id> | playlist add <id> <trackIds...> | playlist remove <id> <trackIds...>
 Queue:       queue add <trackId> (explicitly unsupported)
 Devices:     devices
+MCP:         mcp
 Auth:        auth import|token|status|clear
 Config:      config status | config engine [native|api|auto] | config storefront [code|auto]
 ```
@@ -97,6 +101,8 @@ Config:      config status | config engine [native|api|auto] | config storefront
 ## Key Rules
 
 - Preserve human, `--json`, and `--plain` output for every command.
+- Give each command that agents need a matching MCP tool in `src/mcp.ts`, returning
+  the same shape as its `--json` output.
 - Use output helpers from `src/lib/output.ts`; do not raw-print errors.
 - Use `MusicError` subclasses for expected failures.
 - Keep IDs source-qualified:
@@ -132,7 +138,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 77 tests across 14 files
+bun test  # 82 tests across 15 files
 ```
 
 ## macOS Notes

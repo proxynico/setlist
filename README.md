@@ -46,6 +46,31 @@ setlist library audit                # duplicates, orphans, playlist shape
 iTerm2 and WezTerm. Other terminals, tmux, pipes, `--json` and `--plain` get
 text only.
 
+## Use It From an AI Assistant
+
+`setlist mcp` runs an [MCP](https://modelcontextprotocol.io) server, so Claude
+Code, Claude Desktop, Cursor and other MCP apps can play music, search, read your
+library and tidy playlists. Asked what's playing, an assistant sees the album
+art too.
+
+```bash
+claude mcp add setlist -- setlist mcp
+```
+
+For other apps, add this to their MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "setlist": { "command": "setlist", "args": ["mcp"] }
+  }
+}
+```
+
+It uses the same engines as the command line; `setlist --engine native mcp`
+picks one. Reads are marked read-only, and removing tracks from a playlist is
+marked destructive.
+
 ## For Scripts and Agents
 
 Every command has three output modes:
@@ -133,6 +158,7 @@ Library:     library tracks|albums|playlists | library playlist <id>
 Gardening:   library audit|duplicates|orphans|themes
 Playlists:   playlist info <id> | playlist add <id> <trackIds...> | playlist remove <id> <trackIds...>
 Devices:     devices
+Assistants:  mcp
 Sign-in:     auth import|token|status|clear
 Config:      config status | config engine [native|api|auto] | config storefront [code|auto]
 ```

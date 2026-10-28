@@ -12,6 +12,7 @@ import { registerAuthCommands } from "./commands/auth";
 import { registerDeviceCommands } from "./commands/devices";
 import { registerQueueCommands } from "./commands/queue";
 import { registerConfigCommands } from "./commands/config";
+import { registerMcpCommand } from "./commands/mcp";
 import { loadConfig } from "./lib/config";
 import { getOutputMode, outputErrorDetails, setColorEnabled, setVerboseEnabled } from "./lib/output";
 import { type CliConfig, ENGINE_NAMES, type EngineName, type MusicEngine } from "./lib/types";
@@ -48,9 +49,14 @@ function createEngine(name: EngineName): MusicEngine {
 }
 
 // Created on first use, so config and auth commands never touch Music.app or the API.
-let engine: MusicEngine | undefined;
-function getEngine(): MusicEngine {
-  engine ??= createEngine(program.opts().engine ?? config.defaultEngine);
+// Commands use the selected engine; MCP tools can also ask for a specific one.
+const engines = new Map<EngineName, MusicEngine>();
+function getEngine(name: EngineName = program.opts().engine ?? config.defaultEngine): MusicEngine {
+  let engine = engines.get(name);
+  if (!engine) {
+    engine = createEngine(name);
+    engines.set(name, engine);
+  }
   return engine;
 }
 
@@ -61,6 +67,7 @@ registerAuthCommands(program);
 registerDeviceCommands(program, getEngine);
 registerQueueCommands(program);
 registerConfigCommands(program);
+registerMcpCommand(program, getEngine);
 
 try {
   config = await loadConfig();

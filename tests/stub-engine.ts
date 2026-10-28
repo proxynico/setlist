@@ -1,0 +1,45 @@
+import type { MusicEngine, PlaybackState, SearchResults } from "../src/lib/types";
+
+export function createStubEngine(overrides: Partial<MusicEngine> = {}): MusicEngine {
+  return {
+    play: async () => {},
+    pause: async () => {},
+    resume: async () => {},
+    next: async () => {},
+    previous: async () => {},
+    seek: async () => {},
+    setVolume: async () => {},
+    getVolume: async () => 0,
+    setShuffle: async () => {},
+    getShuffle: async () => false,
+    setRepeat: async () => {},
+    getRepeat: async () => "off",
+    getStatus: async (): Promise<PlaybackState> => ({
+      state: "stopped",
+      track: null,
+      position: 0,
+      volume: 0,
+      shuffleEnabled: false,
+      repeatMode: "off",
+    }),
+    search: async (): Promise<SearchResults> => ({ tracks: [], albums: [], artists: [], playlists: [] }),
+    getPlaylists: async () => [],
+    getPlaylistTracks: async () => [],
+    getPlaylistInfo: async () => ({
+      id: "native:derived:test",
+      source: "native",
+      name: "Test",
+      trackCount: 0,
+      totalDuration: 0,
+      tracks: [],
+      topArtists: [],
+      genres: [],
+    }),
+    getLibraryTracks: async () => [],
+    getLibraryAlbums: async () => [],
+    addToPlaylist: async () => {},
+    removeFromPlaylist: async () => {},
+    getDevices: async () => [],
+    ...overrides,
+  };
+}
