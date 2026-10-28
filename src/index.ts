@@ -12,6 +12,7 @@ import { registerAuthCommands } from "./commands/auth";
 import { registerDeviceCommands } from "./commands/devices";
 import { registerQueueCommands } from "./commands/queue";
 import { registerConfigCommands } from "./commands/config";
+import { registerMcpCommand } from "./commands/mcp";
 import { loadConfig } from "./lib/config";
 import { getOutputMode, outputErrorDetails, setColorEnabled, setVerboseEnabled } from "./lib/output";
 import { type CliConfig, ENGINE_NAMES, type EngineName, type MusicEngine } from "./lib/types";
@@ -61,6 +62,7 @@ registerAuthCommands(program);
 registerDeviceCommands(program, getEngine);
 registerQueueCommands(program);
 registerConfigCommands(program);
+registerMcpCommand(program, getEngine);
 
 try {
   config = await loadConfig();

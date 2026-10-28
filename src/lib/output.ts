@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import type { LibraryAudit } from "./library-audit";
+import { duplicatesReport, type LibraryAudit, orphansReport, themesReport } from "./library-audit";
 import { besideImage, type CellBox, type ImageProtocol, imageEscape } from "./terminal-image";
 import type {
   OutputMode,
@@ -349,12 +349,7 @@ export function outputLibraryAudit(audit: LibraryAudit, mode: OutputMode) {
 }
 
 export function outputLibraryDuplicates(audit: LibraryAudit, mode: OutputMode, limit: number) {
-  const payload = {
-    duplicateNameArtistBuckets: audit.duplicateCandidates.length,
-    exactCatalogDuplicateBuckets: audit.exactCatalogDuplicates.length,
-    duplicateCandidates: audit.duplicateCandidates.slice(0, limit),
-    exactCatalogDuplicates: audit.exactCatalogDuplicates.slice(0, limit),
-  };
+  const payload = duplicatesReport(audit, limit);
   if (mode === "json") return outputJson(payload);
   if (mode === "plain") {
     for (const item of payload.duplicateCandidates) row("duplicate", item.key, item.count);
@@ -378,18 +373,17 @@ export function outputLibraryDuplicates(audit: LibraryAudit, mode: OutputMode, l
 }
 
 export function outputLibraryOrphans(audit: LibraryAudit, mode: OutputMode, limit: number) {
-  const tracks = audit.orphanTracks.slice(0, limit);
-  if (mode === "json") return outputJson({ count: audit.orphanTracks.length, tracks });
-  if (mode === "human") console.log(c(BOLD + WHITE, `Tracks Outside Playlists (${audit.orphanTracks.length})`));
-  outputTracks(tracks, mode);
+  const report = orphansReport(audit, limit);
+  if (mode === "json") return outputJson(report);
+  if (mode === "human") console.log(c(BOLD + WHITE, `Tracks Outside Playlists (${report.count})`));
+  outputTracks(report.tracks, mode);
 }
 
 export function outputLibraryThemes(audit: LibraryAudit, mode: OutputMode, limit: number) {
-  const suggestions = audit.themeSuggestions
-    .map((theme) => ({ ...theme, candidates: theme.candidates.slice(0, limit) }))
-    .filter((theme) => theme.candidates.length > 0);
+  const report = themesReport(audit, limit);
+  const { suggestions } = report;
 
-  if (mode === "json") return outputJson({ count: suggestions.length, suggestions });
+  if (mode === "json") return outputJson(report);
   if (mode === "plain") {
     for (const theme of suggestions) {
       for (const { score, track, reasons } of theme.candidates) {

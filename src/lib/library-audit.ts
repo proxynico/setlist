@@ -364,3 +364,31 @@ export async function collectLibrarySnapshot(
 
   return { tracks, albums, playlists, playlistTracks };
 }
+
+// ── Report shapes shared by `--json` output and the MCP server ──
+
+/** The audit without its long track lists, which the focused reports page through. */
+export function auditSummary(audit: LibraryAudit) {
+  const { duplicateCandidates, exactCatalogDuplicates, orphanTracks, themeSuggestions, ...summary } = audit;
+  return summary;
+}
+
+export function duplicatesReport(audit: LibraryAudit, limit: number) {
+  return {
+    duplicateNameArtistBuckets: audit.duplicateCandidates.length,
+    exactCatalogDuplicateBuckets: audit.exactCatalogDuplicates.length,
+    duplicateCandidates: audit.duplicateCandidates.slice(0, limit),
+    exactCatalogDuplicates: audit.exactCatalogDuplicates.slice(0, limit),
+  };
+}
+
+export function orphansReport(audit: LibraryAudit, limit: number) {
+  return { count: audit.orphanTracks.length, tracks: audit.orphanTracks.slice(0, limit) };
+}
+
+export function themesReport(audit: LibraryAudit, limit: number) {
+  const suggestions = audit.themeSuggestions
+    .map((theme) => ({ ...theme, candidates: theme.candidates.slice(0, limit) }))
+    .filter((theme) => theme.candidates.length > 0);
+  return { count: suggestions.length, suggestions };
+}
