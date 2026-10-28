@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { getOutputMode, outputErrorDetails, outputTracks, setColorEnabled, setVerboseEnabled } from "../src/lib/output";
+import {
+  getOutputMode,
+  outputErrorDetails,
+  outputStatus,
+  outputTracks,
+  setColorEnabled,
+  setVerboseEnabled,
+} from "../src/lib/output";
 import { ExternalServiceError } from "../src/lib/errors";
 
 function captureErrors(run: () => void): string[] {
@@ -63,6 +70,52 @@ describe("plain output", () => {
 
     expect(lines).toEqual([
       "track\tnative:persistent:ABC123\tone\\ttwo\tline\\nbreak\tcarriage\\rreturn\t1:01\tnative",
+    ]);
+  });
+});
+
+describe("status output", () => {
+  test("shows the track, a progress bar, and playback modes", () => {
+    const lines: string[] = [];
+    const originalLog = console.log;
+    console.log = (value?: unknown) => {
+      lines.push(String(value));
+    };
+    setColorEnabled(false);
+
+    try {
+      outputStatus(
+        {
+          state: "playing",
+          track: {
+            id: "native:persistent:ABC123",
+            source: "native",
+            persistentId: "ABC123",
+            name: "Airbag",
+            artist: "Radiohead",
+            album: "OK Computer",
+            year: 1997,
+            duration: 240,
+          },
+          position: 60,
+          volume: 70,
+          shuffleEnabled: true,
+          repeatMode: "all",
+        },
+        "human",
+      );
+    } finally {
+      console.log = originalLog;
+      setColorEnabled(true);
+    }
+
+    expect(lines).toEqual([
+      "Airbag",
+      "Radiohead",
+      "OK Computer · 1997",
+      "",
+      `▶ 1:00 ${"━".repeat(6)}${"─".repeat(18)} 4:00`,
+      "volume 70 · shuffle · repeat all",
     ]);
   });
 });

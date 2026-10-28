@@ -65,6 +65,11 @@ export interface PlaybackState {
   volume: number; // 0-100
   shuffleEnabled: boolean;
   repeatMode: RepeatMode;
+  artworkPath?: string; // PNG of the current track's artwork, only when requested
+}
+
+export interface StatusOptions {
+  artwork?: boolean; // export the current track's artwork to a local PNG
 }
 
 export interface SearchResults {
@@ -99,7 +104,7 @@ export interface MusicEngine {
   getShuffle(): Promise<boolean>;
   setRepeat(mode: RepeatMode): Promise<void>;
   getRepeat(): Promise<RepeatMode>;
-  getStatus(): Promise<PlaybackState>;
+  getStatus(options?: StatusOptions): Promise<PlaybackState>;
 
   // Search
   search(query: string, types: SearchType[], limit?: number): Promise<SearchResults>;

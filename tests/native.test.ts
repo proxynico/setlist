@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   createMusicApplicationSource,
+  decodeArtworkData,
   deriveAlbumsFromTracks,
   deriveArtistsFromTracks,
   musicScriptingUnavailableRecovery,
@@ -55,6 +56,16 @@ describe("native derived entities", () => {
     const artists = deriveArtistsFromTracks(tracks, 10);
     expect(artists).toHaveLength(1);
     expect(artists[0].id).toBe("native:derived:artist:Radiohead");
+  });
+});
+
+describe("native artwork", () => {
+  test("decodes the data literal Music.app returns for artwork", () => {
+    expect(decodeArtworkData("'tdta'($FFD8FFE0$)")).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  });
+
+  test("ignores tracks without artwork", () => {
+    expect(decodeArtworkData("")).toBeUndefined();
   });
 });
 

@@ -7,6 +7,7 @@ import type {
   SearchResults,
   SearchType,
   RepeatMode,
+  StatusOptions,
 } from "../lib/types";
 import { NativeEngine } from "./native";
 import { ApiEngine } from "./api";
@@ -73,8 +74,8 @@ export class AutoEngine implements MusicEngine {
   getRepeat() {
     return this.native.getRepeat();
   }
-  getStatus() {
-    return this.native.getStatus();
+  getStatus(options?: StatusOptions) {
+    return this.native.getStatus(options);
   }
   getDevices() {
     return this.native.getDevices();
