@@ -55,6 +55,7 @@ src/
     auth.ts             auth import|token|status|clear
     config.ts           config status|engine|storefront
     mcp.ts              mcp: stdio MCP server command
+    replay.ts           replay [year]: Apple Music Replay
     devices.ts          AirPlay device listing
     queue.ts            queue add, explicit unsupported operation
   engines/
@@ -70,6 +71,7 @@ src/
     output.ts           Human, JSON, and plain output helpers
     terminal-image.ts   Inline album art for Kitty- and iTerm2-protocol terminals
     library-audit.ts    Read-only library gardening analysis
+    replay.ts           Replay report shape and artists-in-top-songs ranking
     config.ts           Config file
     concurrency.ts      Bounded parallel map
     cookies.ts          Browser cookie extraction
@@ -90,6 +92,7 @@ Modes:       shuffle [on|off] | repeat [off|one|all]
 Search:      search track|album|artist|playlist|all <query> [-l limit]
 Library:     library tracks|albums|playlists | library playlist <id>
 Gardening:   library audit|duplicates|orphans|themes
+Replay:      replay [year] [-l limit]   (API only)
 Playlists:   playlist info <id> | playlist add <id> <trackIds...> | playlist remove <id> <trackIds...>
 Queue:       queue add <trackId> (explicitly unsupported)
 Devices:     devices
@@ -138,7 +141,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 82 tests across 15 files
+bun test  # 89 tests across 16 files
 ```
 
 ## macOS Notes

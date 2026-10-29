@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { duplicatesReport, type LibraryAudit, orphansReport, themesReport } from "./library-audit";
+import { replayReport } from "./replay";
 import { besideImage, type CellBox, type ImageProtocol, imageEscape } from "./terminal-image";
 import type {
   OutputMode,
@@ -9,6 +10,7 @@ import type {
   Playlist,
   PlaylistDetails,
   PlaybackState,
+  Replay,
   Device,
   SearchResults,
   CountedValue,
@@ -403,6 +405,69 @@ export function outputLibraryThemes(audit: LibraryAudit, mode: OutputMode, limit
     for (const { track, reasons } of theme.candidates) {
       console.log(`  ${track.name} ${c(DIM, "--")} ${track.artist} ${c(DIM, `(${reasons.join(", ")})`)}`);
     }
+  }
+}
+
+// ── Replay ──
+
+const BAR_WIDTH = 24;
+
+function scaledBars(items: Array<{ label: string; value: number; shown: string }>): string[] {
+  const max = Math.max(1, ...items.map((item) => item.value));
+  const labelWidth = Math.max(...items.map((item) => Bun.stringWidth(item.label)));
+  return items.map(({ label, value, shown }) => {
+    const bar = "━".repeat(Math.max(1, Math.round((value / max) * BAR_WIDTH)));
+    const pad = " ".repeat(labelWidth - Bun.stringWidth(label));
+    return `  ${c(WHITE, label)}${pad}  ${c(CYAN, bar)} ${c(DIM, shown)}`;
+  });
+}
+
+const count = (value: number) => value.toLocaleString("en-US");
+
+export function outputReplay(replay: Replay, mode: OutputMode, limit: number) {
+  const report = replayReport(replay, limit);
+  if (mode === "json") return outputJson(report);
+  if (mode === "plain") {
+    row("year", report.year, report.listenMinutes, report.songs, report.artists, report.genres, report.playlistId);
+    for (const [i, t] of report.topSongs.entries()) row("song", i + 1, t.id, t.name, t.artist, t.album);
+    for (const a of report.artistsInTopSongs) row("artist", a.name, a.count);
+    for (const y of report.years) row("history", y.year, y.listenMinutes);
+    return;
+  }
+
+  const final = report.listenMinutes !== undefined;
+  console.log(c(BOLD + WHITE, `Replay ${report.year}${final ? "" : ", so far"}`));
+  const totals = [
+    report.listenMinutes !== undefined ? `${count(Math.round(report.listenMinutes / 60))} hours` : "",
+    report.songs !== undefined ? `${count(report.songs)} songs` : "",
+    report.artists !== undefined ? `${count(report.artists)} artists` : "",
+    report.genres !== undefined ? `${count(report.genres)} genres` : "",
+  ].filter(Boolean);
+  if (totals.length > 0) console.log(c(DIM, totals.join(" · ")));
+
+  if (report.topSongs.length > 0) {
+    console.log(c(BOLD + CYAN, "\nTop Songs"));
+    for (const [i, t] of report.topSongs.entries()) {
+      console.log(
+        `${c(DIM, `${(i + 1).toString().padStart(3)}.`)} ${c(BOLD + WHITE, t.name)} ${c(DIM, "--")} ${c(CYAN, t.artist)}`,
+      );
+    }
+  }
+
+  if (report.artistsInTopSongs.length > 0) {
+    console.log(c(BOLD + CYAN, `\nMost Songs in Your Top ${replay.topSongs.length}`));
+    const artists = report.artistsInTopSongs.map((a) => ({ label: a.name, value: a.count, shown: String(a.count) }));
+    for (const line of scaledBars(artists)) console.log(line);
+  }
+
+  const history = report.years.filter((y) => y.listenMinutes !== undefined);
+  if (history.length > 1) {
+    console.log(c(BOLD + CYAN, "\nHours by Year"));
+    const hours = history.map((y) => {
+      const value = Math.round((y.listenMinutes ?? 0) / 60);
+      return { label: String(y.year), value, shown: count(value) };
+    });
+    for (const line of scaledBars(hours)) console.log(line);
   }
 }
 

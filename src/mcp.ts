@@ -11,6 +11,7 @@ import {
   orphansReport,
   themesReport,
 } from "./lib/library-audit";
+import { replayReport } from "./lib/replay";
 import type { EngineName, MusicEngine, SearchType } from "./lib/types";
 
 /**
@@ -255,6 +256,20 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
       if (report === "themes") return [json(themesReport(audit, limit))];
       return [json(auditSummary(audit))];
     }),
+  );
+
+  tools.replay = server.registerTool(
+    "replay",
+    {
+      description:
+        "The user's Apple Music Replay for a year: hours listened, song, artist and genre counts, top songs in order, the artists with the most songs in the year's whole top songs playlist, and totals for every year. Needs Apple Music API sign-in.",
+      inputSchema: {
+        year: z.number().int().min(1).optional().describe("Defaults to the latest year"),
+        limit: limitSchema(10).describe("Max top songs and artists"),
+      },
+      annotations: { ...READ_ONLY, openWorldHint: true },
+    },
+    tool(async ({ year, limit }) => [json(replayReport(await getEngine().getReplay(year), limit))]),
   );
 
   // ── Playlist edits ──

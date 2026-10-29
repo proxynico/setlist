@@ -40,6 +40,7 @@ export function createStubEngine(overrides: Partial<MusicEngine> = {}): MusicEng
     addToPlaylist: async () => {},
     removeFromPlaylist: async () => {},
     getDevices: async () => [],
+    getReplay: async () => ({ year: { year: 2025 }, years: [{ year: 2025 }], topSongs: [] }),
     ...overrides,
   };
 }

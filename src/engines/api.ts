@@ -8,6 +8,8 @@ import type {
   SearchResults,
   SearchType,
   CliConfig,
+  Replay,
+  ReplayYear,
 } from "../lib/types";
 import { loadConfig } from "../lib/config";
 import { buildIdentity, resolveRawId } from "../lib/entities";
@@ -207,6 +209,7 @@ interface AMResource {
   id: string;
   type: string;
   attributes?: Record<string, unknown>;
+  relationships?: Record<string, unknown>;
 }
 
 interface AMResponse {
@@ -332,6 +335,38 @@ function parseApiPlaylist(r: AMResource): Playlist {
     description: str(recordOrEmpty(a.description).short) || undefined,
     artworkUrl: formatArtwork(a.artwork),
   };
+}
+
+function optionalNum(val: unknown): number | undefined {
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+}
+
+interface ReplaySummary {
+  year: ReplayYear;
+  topSongsPath?: string;
+}
+
+function parseReplaySummary(r: AMResource): ReplaySummary[] {
+  const a = recordOrEmpty(r.attributes);
+  const year = optionalNum(a.year);
+  if (!year) return [];
+  const playlistData = recordOrEmpty(recordOrEmpty(r.relationships).playlist).data;
+  const playlist = recordOrEmpty(Array.isArray(playlistData) ? playlistData[0] : undefined);
+  const playlistId = str(playlist.id);
+  const href = str(playlist.href);
+  return [
+    {
+      year: {
+        year,
+        listenMinutes: optionalNum(a.listenTimeInMinutes),
+        songs: optionalNum(a.uniqueSongCount),
+        artists: optionalNum(a.uniqueArtistCount),
+        genres: optionalNum(a.uniqueGenreCount),
+        playlistId: playlistId ? buildIdentity({ source: "api", catalogId: playlistId }).id : undefined,
+      },
+      topSongsPath: href.startsWith("/v1/") ? `${href.slice(3)}/tracks` : undefined,
+    },
+  ];
 }
 
 function parseNextPage(next: string, limit: string): ApiPage {
@@ -515,5 +550,33 @@ export class ApiEngine implements MusicEngine {
 
   async getLibraryAlbums(limit = 50, offset = 0): Promise<Album[]> {
     return (await this.requestPages("/me/library/albums", { offset: String(offset) }, limit)).map(parseApiAlbum);
+  }
+
+  // ── Listening history ──
+
+  async getReplay(year?: number): Promise<Replay> {
+    const summaries = await this.request<AMResponse>("/me/music-summaries/search", {
+      period: "year",
+      views: "top-artists,top-albums,top-songs",
+    });
+    const years = (summaries.data ?? []).flatMap(parseReplaySummary).sort((a, b) => b.year.year - a.year.year);
+    const chosen = year === undefined ? years[0] : years.find((summary) => summary.year.year === year);
+    if (!chosen) {
+      const first = years.at(-1)?.year.year;
+      throw new MusicError(
+        year === undefined
+          ? "Apple Music has no Replay for this account yet."
+          : `Apple Music has no Replay for ${year}.`,
+        {
+          code: "not_found",
+          hint: first
+            ? `Replay covers ${first} to ${years[0].year.year}.`
+            : "Replay appears once you've listened for a while.",
+        },
+      );
+    }
+
+    const topSongs = chosen.topSongsPath ? (await this.requestPages(chosen.topSongsPath, {})).map(parseApiTrack) : [];
+    return { year: chosen.year, years: years.map((summary) => summary.year), topSongs };
   }
 }

@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -16,10 +16,11 @@ import type {
   Device,
   DeviceKind,
   RepeatMode,
+  Replay,
   StatusOptions,
 } from "../lib/types";
 import { buildIdentity, resolveRawId } from "../lib/entities";
-import { ExternalServiceError, MusicError } from "../lib/errors";
+import { ExternalServiceError, MusicError, UnsupportedOperationError } from "../lib/errors";
 import { summarizePlaylistTracks } from "../lib/library-audit";
 
 /**
@@ -169,13 +170,22 @@ async function saveArtworkPng({
 }): Promise<string | undefined> {
   const bytes = decodeArtworkData(literal);
   if (!bytes) return undefined;
-  const source = join(tmpdir(), `${name}.source`);
-  const path = join(tmpdir(), `${name}.png`);
-  await Bun.write(source, bytes);
-  const resize = maxPixels ? ["-Z", String(maxPixels)] : [];
-  const result = await $`sips -s format png ${resize} ${source} --out ${path}`.quiet().nothrow();
-  await rm(source, { force: true });
-  return result.exitCode === 0 ? path : undefined;
+  // Each export converts in its own folder, then renames into place, so concurrent
+  // calls never remove each other's input or expose a half-written PNG.
+  const scratch = await mkdtemp(join(tmpdir(), "setlist-artwork-"));
+  try {
+    const source = join(scratch, "source");
+    const converted = join(scratch, "artwork.png");
+    await Bun.write(source, bytes);
+    const resize = maxPixels ? ["-Z", String(maxPixels)] : [];
+    const result = await $`sips -s format png ${resize} ${source} --out ${converted}`.quiet().nothrow();
+    if (result.exitCode !== 0) return undefined;
+    const path = join(tmpdir(), `${name}.png`);
+    await rename(converted, path);
+    return path;
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
 }
 
 // Big enough for a crisp thumbnail on a Retina terminal, small enough to send inline.
@@ -494,6 +504,13 @@ export class NativeEngine implements MusicEngine {
       for (const track of tracks) track.delete();
     `,
       { retry: false },
+    );
+  }
+
+  async getReplay(): Promise<Replay> {
+    throw new UnsupportedOperationError(
+      "Replay needs the Apple Music API.",
+      "Sign in with `setlist auth import --browser safari`, then use `--engine auto` or `--engine api`.",
     );
   }
 

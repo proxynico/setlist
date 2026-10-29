@@ -38,6 +38,7 @@ setlist shuffle on
 setlist repeat all
 setlist library playlists
 setlist library audit                # duplicates, orphans, playlist shape
+setlist replay 2025                  # your year in music
 ```
 
 ## Album Art
@@ -45,6 +46,18 @@ setlist library audit                # duplicates, orphans, playlist shape
 `setlist status` draws the current track's artwork beside it in Ghostty, Kitty,
 iTerm2 and WezTerm. Other terminals, tmux, pipes, `--json` and `--plain` get
 text only.
+
+## Replay
+
+```bash
+setlist replay          # this year so far
+setlist replay 2025     # a past year
+```
+
+Apple Music Replay, in your terminal: hours listened, how many songs, artists
+and genres, your top songs in order, the artists with the most songs among
+them, and your hours for every year since you joined. It needs the Apple Music
+sign-in described below.
 
 ## Use It From an AI Assistant
 
@@ -125,8 +138,8 @@ setlist auth status
 setlist auth clear
 ```
 
-The token is kept in the macOS Keychain under the `setlist` service and never
-written to a file.
+The token is kept in the macOS Keychain under the `setlist` service, not in
+config files.
 
 ## Library Gardening
 
@@ -156,6 +169,7 @@ Modes:       shuffle [on|off] | repeat [off|one|all]
 Search:      search track|album|artist|playlist|all <query> [-l limit]
 Library:     library tracks|albums|playlists | library playlist <id>
 Gardening:   library audit|duplicates|orphans|themes
+Replay:      replay [year] [-l limit]
 Playlists:   playlist info <id> | playlist add <id> <trackIds...> | playlist remove <id> <trackIds...>
 Devices:     devices
 Assistants:  mcp
