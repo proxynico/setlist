@@ -361,7 +361,6 @@ function parseReplaySummary(r: AMResource): ReplaySummary[] {
         listenMinutes: optionalNum(a.listenTimeInMinutes),
         songs: optionalNum(a.uniqueSongCount),
         artists: optionalNum(a.uniqueArtistCount),
-        albums: optionalNum(a.uniqueAlbumCount),
         genres: optionalNum(a.uniqueGenreCount),
         playlistId: playlistId ? buildIdentity({ source: "api", catalogId: playlistId }).id : undefined,
       },

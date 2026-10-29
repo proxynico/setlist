@@ -56,7 +56,6 @@ describe("API Replay", () => {
       listenMinutes: 60000,
       songs: 3000,
       artists: 1700,
-      albums: undefined,
       genres: undefined,
       playlistId: "api:catalog:pl.rp-2025",
     });
@@ -141,7 +140,7 @@ describe("Replay report", () => {
       "\nTop Songs",
       "  1. Nights -- Frank Ocean",
       "  2. Latch -- Disclosure",
-      "\nMost Songs in Your Top Songs",
+      "\nMost Songs in Your Top 3",
       `  Frank Ocean  ${"━".repeat(24)} 2`,
       `  Disclosure   ${"━".repeat(12)} 1`,
       "\nHours by Year",

@@ -262,7 +262,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     "replay",
     {
       description:
-        "The user's Apple Music Replay for a year: hours listened, song, artist and genre counts, top songs in order, the artists with the most top songs, and totals for every year. Needs Apple Music API sign-in.",
+        "The user's Apple Music Replay for a year: hours listened, song, artist and genre counts, top songs in order, the artists with the most songs in the year's whole top songs playlist, and totals for every year. Needs Apple Music API sign-in.",
       inputSchema: {
         year: z.number().int().min(1).optional().describe("Defaults to the latest year"),
         limit: limitSchema(10).describe("Max top songs and artists"),

@@ -85,7 +85,6 @@ export interface ReplayYear {
   listenMinutes?: number;
   songs?: number;
   artists?: number;
-  albums?: number;
   genres?: number;
   playlistId?: string; // the year's "Replay Your Top Songs" catalog playlist
 }

@@ -455,7 +455,7 @@ export function outputReplay(replay: Replay, mode: OutputMode, limit: number) {
   }
 
   if (report.artistsInTopSongs.length > 0) {
-    console.log(c(BOLD + CYAN, "\nMost Songs in Your Top Songs"));
+    console.log(c(BOLD + CYAN, `\nMost Songs in Your Top ${replay.topSongs.length}`));
     const artists = report.artistsInTopSongs.map((a) => ({ label: a.name, value: a.count, shown: String(a.count) }));
     for (const line of scaledBars(artists)) console.log(line);
   }
