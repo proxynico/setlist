@@ -4,8 +4,7 @@ Apple Music CLI for power users and AI agents.
 
 Repo: `https://github.com/proxynico/setlist`
 
-Setlist remains maintained. Settled 24 October 2026 by Nico. Rejected: retiring
-Setlist or treating it as archived.
+Setlist remains maintained.
 
 ## What This App Is
 
