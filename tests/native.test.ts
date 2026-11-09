@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createMusicApplicationSource,
   decodeArtworkData,
@@ -70,10 +73,10 @@ describe("native artwork", () => {
 });
 
 describe("native Music.app resolution", () => {
-  test("uses the system Music.app path when it exists", () => {
-    expect(createMusicApplicationSource("/System/Applications/Music.app")).toBe(
-      'Application("/System/Applications/Music.app")',
-    );
+  test("uses the Music.app path when it exists", () => {
+    const appPath = join(mkdtempSync(join(tmpdir(), "setlist-")), "Music.app");
+    mkdirSync(appPath);
+    expect(createMusicApplicationSource(appPath)).toBe(`Application(${JSON.stringify(appPath)})`);
   });
 
   test("falls back to the application name when the system path is missing", () => {
