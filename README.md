@@ -1,4 +1,9 @@
-# Setlist
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <img src="assets/logo.svg" alt="Setlist" width="256" height="84">
+  </picture>
+</h1>
 
 Apple Music from your terminal, for you and your AI agents.
 
