@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Setlist</title>
+  <rect width="64" height="64" rx="15" fill="#ff4f70"/>
+  <path d="m17 21 11 11-11 11" fill="none" stroke="#18181e" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M37 22h11M37 32h8M37 42h11" fill="none" stroke="#18181e" stroke-width="5" stroke-linecap="round"/>
+</svg>
