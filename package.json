@@ -7,14 +7,12 @@
     "setlist": "./src/index.ts"
   },
   "scripts": {
-    "dev": "bun run src/index.ts",
     "build": "bun build src/index.ts --compile --outfile dist/setlist",
-    "link": "bun link",
     "typecheck": "bunx tsc --noEmit",
     "test": "bun test",
-    "lint": "biome check src tests",
-    "format": "biome check --write src tests",
-    "check": "biome check src tests && bun run typecheck && bun test"
+    "lint": "biome check",
+    "format": "biome check --write",
+    "check": "biome check && bun run typecheck && bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
