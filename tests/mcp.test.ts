@@ -10,7 +10,7 @@ import { createStubEngine } from "./stub-engine";
 
 async function connect(engine: MusicEngine, engines: Partial<Record<EngineName, MusicEngine>> = {}): Promise<Client> {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await createMcpServer((name) => (name && engines[name]) || engine).server.connect(serverTransport);
+  await createMcpServer((name) => (name && engines[name]) || engine).connect(serverTransport);
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(clientTransport);
   return client;

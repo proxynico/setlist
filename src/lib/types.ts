@@ -143,7 +143,8 @@ export interface MusicEngine {
   getReplay(year?: number): Promise<Replay>;
 }
 
-export type SearchType = "track" | "album" | "artist" | "playlist";
+export const SEARCH_TYPES = ["track", "album", "artist", "playlist"] as const;
+export type SearchType = (typeof SEARCH_TYPES)[number];
 
 export type OutputMode = "human" | "json" | "plain";
 

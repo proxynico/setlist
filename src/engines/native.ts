@@ -48,12 +48,9 @@ function isMusicScriptingUnavailableError(error: string): boolean {
   return error.includes("-1701") || error.includes("-10827") || error.includes("Parameter is missing");
 }
 
-export function musicScriptingUnavailableRecovery(): string {
-  return [
-    "If you are running from Codex/cmux, rerun the whole `setlist ...` command outside the sandbox/escalated so it can attach to Music.app.",
-    "If it still fails outside the sandbox, grant the calling app Automation permission for Music.app in System Settings.",
-  ].join(" ");
-}
+const MUSIC_SCRIPTING_RECOVERY =
+  "If you are running from Codex/cmux, rerun the whole `setlist ...` command outside the sandbox/escalated so it can attach to Music.app. " +
+  "If it still fails outside the sandbox, grant the calling app Automation permission for Music.app in System Settings.";
 
 async function osascript(script: string) {
   const result = await $`osascript -l JavaScript -e ${script}`.quiet().nothrow();
@@ -86,7 +83,7 @@ function scriptError(stderr: string, cause?: unknown): ExternalServiceError {
   if (isMusicScriptingUnavailableError(stderr)) {
     return new ExternalServiceError(
       "Music.app could not be launched or controlled by this process.",
-      musicScriptingUnavailableRecovery(),
+      MUSIC_SCRIPTING_RECOVERY,
       cause,
     );
   }
@@ -334,8 +331,7 @@ export class NativeEngine implements MusicEngine {
   }
 
   async setVolume(level: number): Promise<void> {
-    const clamped = Math.max(0, Math.min(100, Math.round(level)));
-    await jxa(`music.soundVolume = ${clamped};`);
+    await jxa(`music.soundVolume = ${level};`);
   }
 
   async getVolume(): Promise<number> {

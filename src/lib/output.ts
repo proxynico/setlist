@@ -15,7 +15,7 @@ import type {
   SearchResults,
   CountedValue,
 } from "./types";
-import { isMusicError, ValidationError } from "./errors";
+import { MusicError, ValidationError } from "./errors";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -107,24 +107,26 @@ interface ListFormat<T> {
   human: (item: T) => string;
 }
 
-function outputList<T>(items: T[], mode: OutputMode, format: ListFormat<T>) {
-  if (mode === "json") return outputJson(items);
-  if (mode === "plain") return items.forEach(format.plain);
-  if (items.length === 0) return console.log(c(DIM, `No ${format.noun}s found`));
-  console.log(c(DIM, plural(items.length, format.noun)));
-  for (const [i, item] of items.entries()) {
-    console.log(`${c(DIM, `${(i + 1).toString().padStart(3)}.`)} ${format.human(item)}`);
-  }
+function listOutput<T>(format: ListFormat<T>) {
+  return (items: T[], mode: OutputMode) => {
+    if (mode === "json") return outputJson(items);
+    if (mode === "plain") return items.forEach(format.plain);
+    if (items.length === 0) return console.log(c(DIM, `No ${format.noun}s found`));
+    console.log(c(DIM, plural(items.length, format.noun)));
+    for (const [i, item] of items.entries()) {
+      console.log(`${c(DIM, `${(i + 1).toString().padStart(3)}.`)} ${format.human(item)}`);
+    }
+  };
 }
 
-const trackFormat: ListFormat<Track> = {
+export const outputTracks = listOutput<Track>({
   noun: "track",
   plain: (t) => row("track", t.id, t.name, t.artist, t.album, formatDuration(t.duration), t.source),
   human: (t) =>
     `${c(BOLD + WHITE, t.name)} ${c(DIM, "--")} ${c(CYAN, t.artist)} ${c(DIM, "/")} ${c(DIM, t.album)} ${c(DIM, formatDuration(t.duration))}`,
-};
+});
 
-const albumFormat: ListFormat<Album> = {
+export const outputAlbums = listOutput<Album>({
   noun: "album",
   plain: (a) => row("album", a.id, a.name, a.artist, a.trackCount, a.year, a.source),
   human: (a) =>
@@ -135,46 +137,26 @@ const albumFormat: ListFormat<Album> = {
     ]
       .filter(Boolean)
       .join(" "),
-};
+});
 
-const artistFormat: ListFormat<Artist> = {
+export const outputArtists = listOutput<Artist>({
   noun: "artist",
   plain: (a) => row("artist", a.id, a.name, a.genre, a.source),
   human: (a) => `${c(BOLD + WHITE, a.name)}${a.genre ? ` ${c(DIM, `(${a.genre})`)}` : ""}`,
-};
+});
 
-const playlistFormat: ListFormat<Playlist> = {
+export const outputPlaylists = listOutput<Playlist>({
   noun: "playlist",
   plain: (p) => row("playlist", p.id, p.name, p.trackCount, p.source),
   human: (p) =>
     `${c(BOLD + WHITE, p.name)}${p.trackCount !== undefined ? ` ${c(DIM, plural(p.trackCount, "track"))}` : ""}`,
-};
+});
 
-const deviceFormat: ListFormat<Device> = {
+export const outputDevices = listOutput<Device>({
   noun: "device",
   plain: (d) => row("device", d.id, d.name, d.kind, d.active),
   human: (d) => `${c(BOLD + WHITE, d.name)} ${c(DIM, d.kind)}${d.active ? c(GREEN, " (active)") : ""}`,
-};
-
-export function outputTracks(tracks: Track[], mode: OutputMode) {
-  outputList(tracks, mode, trackFormat);
-}
-
-export function outputAlbums(albums: Album[], mode: OutputMode) {
-  outputList(albums, mode, albumFormat);
-}
-
-export function outputArtists(artists: Artist[], mode: OutputMode) {
-  outputList(artists, mode, artistFormat);
-}
-
-export function outputPlaylists(playlists: Playlist[], mode: OutputMode) {
-  outputList(playlists, mode, playlistFormat);
-}
-
-export function outputDevices(devices: Device[], mode: OutputMode) {
-  outputList(devices, mode, deviceFormat);
-}
+});
 
 export function outputSearchResults(results: SearchResults, mode: OutputMode) {
   if (mode === "json") return outputJson(results);
@@ -270,14 +252,21 @@ export function outputStatus(s: PlaybackState, mode: OutputMode, imageProtocol?:
 
 // ── Playlist details ──
 
-function outputBars(title: string, items: CountedValue[]) {
+const BAR_WIDTH = 24;
+
+function outputBars(title: string, items: Array<{ label: string; value: number; shown: string }>) {
   if (items.length === 0) return;
   console.log(c(BOLD + CYAN, `\n${title}`));
-  for (const item of items) {
-    const bar = "=".repeat(Math.min(item.count, 40));
-    console.log(`  ${c(WHITE, item.name.padEnd(25))} ${c(DIM, bar)} ${c(DIM, String(item.count))}`);
+  const max = Math.max(1, ...items.map((item) => item.value));
+  const labelWidth = Math.max(...items.map((item) => Bun.stringWidth(item.label)));
+  for (const { label, value, shown } of items) {
+    const bar = "━".repeat(Math.max(1, Math.round((value / max) * BAR_WIDTH)));
+    const pad = " ".repeat(labelWidth - Bun.stringWidth(label));
+    console.log(`  ${c(WHITE, label)}${pad}  ${c(CYAN, bar)} ${c(DIM, shown)}`);
   }
 }
+
+const counted = (item: CountedValue) => ({ label: item.name, value: item.count, shown: String(item.count) });
 
 export function outputPlaylistDetails(details: PlaylistDetails, mode: OutputMode) {
   if (mode === "json") return outputJson(details);
@@ -307,8 +296,8 @@ export function outputPlaylistDetails(details: PlaylistDetails, mode: OutputMode
     console.log(`${c(DIM, "Artwork:")} ${artwork}`);
   }
 
-  outputBars("Top Artists", details.topArtists);
-  outputBars("Genres", details.genres);
+  outputBars("Top Artists", details.topArtists.map(counted));
+  outputBars("Genres", details.genres.map(counted));
 }
 
 // ── Library gardening ──
@@ -410,18 +399,6 @@ export function outputLibraryThemes(audit: LibraryAudit, mode: OutputMode, limit
 
 // ── Replay ──
 
-const BAR_WIDTH = 24;
-
-function scaledBars(items: Array<{ label: string; value: number; shown: string }>): string[] {
-  const max = Math.max(1, ...items.map((item) => item.value));
-  const labelWidth = Math.max(...items.map((item) => Bun.stringWidth(item.label)));
-  return items.map(({ label, value, shown }) => {
-    const bar = "━".repeat(Math.max(1, Math.round((value / max) * BAR_WIDTH)));
-    const pad = " ".repeat(labelWidth - Bun.stringWidth(label));
-    return `  ${c(WHITE, label)}${pad}  ${c(CYAN, bar)} ${c(DIM, shown)}`;
-  });
-}
-
 const count = (value: number) => value.toLocaleString("en-US");
 
 export function outputReplay(replay: Replay, mode: OutputMode, limit: number) {
@@ -454,20 +431,15 @@ export function outputReplay(replay: Replay, mode: OutputMode, limit: number) {
     }
   }
 
-  if (report.artistsInTopSongs.length > 0) {
-    console.log(c(BOLD + CYAN, `\nMost Songs in Your Top ${replay.topSongs.length}`));
-    const artists = report.artistsInTopSongs.map((a) => ({ label: a.name, value: a.count, shown: String(a.count) }));
-    for (const line of scaledBars(artists)) console.log(line);
-  }
+  outputBars(`Most Songs in Your Top ${replay.topSongs.length}`, report.artistsInTopSongs.map(counted));
 
   const history = report.years.filter((y) => y.listenMinutes !== undefined);
   if (history.length > 1) {
-    console.log(c(BOLD + CYAN, "\nHours by Year"));
     const hours = history.map((y) => {
       const value = Math.round((y.listenMinutes ?? 0) / 60);
       return { label: String(y.year), value, shown: count(value) };
     });
-    for (const line of scaledBars(hours)) console.log(line);
+    outputBars("Hours by Year", hours);
   }
 }
 
@@ -482,7 +454,7 @@ export function outputErrorDetails(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(c(RED, `error: ${message}`));
 
-  if (isMusicError(error)) {
+  if (error instanceof MusicError) {
     if (error.hint) console.error(c(DIM, error.hint));
     if (verboseEnabled && error.cause !== undefined) console.error(c(DIM, `cause: ${formatCause(error.cause)}`));
   } else if (verboseEnabled && error instanceof Error && error.stack) {

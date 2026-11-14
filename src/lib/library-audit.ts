@@ -81,17 +81,6 @@ export interface LibraryAudit {
   themeSuggestions: ThemeSuggestion[];
 }
 
-interface AnalyzeOptions {
-  generatedAt?: string;
-  suggestionsPerTheme?: number;
-  topLimit?: number;
-}
-
-interface SnapshotOptions {
-  maxItems?: number;
-}
-
-const DEFAULT_MAX_ITEMS = 20_000;
 const PLAYLIST_FETCH_CONCURRENCY = 4;
 
 function countBy<T>(items: T[], keyOf: (item: T) => string): Map<string, number> {
@@ -282,9 +271,8 @@ function buildThemeSuggestions(
   );
 }
 
-export function analyzeLibrarySnapshot(snapshot: LibrarySnapshot, options: AnalyzeOptions = {}): LibraryAudit {
-  const topLimit = options.topLimit ?? 25;
-  const suggestionsPerTheme = options.suggestionsPerTheme ?? 20;
+export function analyzeLibrarySnapshot(snapshot: LibrarySnapshot, suggestionsPerTheme = 20): LibraryAudit {
+  const topLimit = 25;
   const { tracks } = snapshot;
   const artistCounts = countBy(tracks, artistOf);
   const albumArtistCounts = countBy(snapshot.albums, (album) => album.artist || "Unknown");
@@ -296,7 +284,7 @@ export function analyzeLibrarySnapshot(snapshot: LibrarySnapshot, options: Analy
   const playlistSummaries = sortedPlaylistSummaries(profiles, 5);
 
   return {
-    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    generatedAt: new Date().toISOString(),
     counts: {
       tracks: tracks.length,
       albums: snapshot.albums.length,
@@ -336,12 +324,7 @@ export function analyzeLibrarySnapshot(snapshot: LibrarySnapshot, options: Analy
   };
 }
 
-export async function collectLibrarySnapshot(
-  engine: MusicEngine,
-  options: SnapshotOptions = {},
-): Promise<LibrarySnapshot> {
-  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS;
-
+export async function collectLibrarySnapshot(engine: MusicEngine, maxItems: number): Promise<LibrarySnapshot> {
   // One call per collection: the API engine follows its own pagination links, and
   // the native engine reads the whole library in a few bulk Apple Events.
   const [tracks, albums, playlists] = await Promise.all([
@@ -387,8 +370,9 @@ export function orphansReport(audit: LibraryAudit, limit: number) {
 }
 
 export function themesReport(audit: LibraryAudit, limit: number) {
-  const suggestions = audit.themeSuggestions
-    .map((theme) => ({ ...theme, candidates: theme.candidates.slice(0, limit) }))
-    .filter((theme) => theme.candidates.length > 0);
+  const suggestions = audit.themeSuggestions.map((theme) => ({
+    ...theme,
+    candidates: theme.candidates.slice(0, limit),
+  }));
   return { count: suggestions.length, suggestions };
 }

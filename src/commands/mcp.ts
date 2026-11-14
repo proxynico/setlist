@@ -8,6 +8,6 @@ export function registerMcpCommand(program: Command, getEngine: (name?: EngineNa
     .command("mcp")
     .description("Run an MCP server on stdio so AI assistants can use Setlist")
     .action(async () => {
-      await createMcpServer(getEngine).server.connect(new StdioServerTransport());
+      await createMcpServer(getEngine).connect(new StdioServerTransport());
     });
 }
