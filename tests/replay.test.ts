@@ -5,6 +5,7 @@ import { MusicError, UnsupportedOperationError } from "../src/lib/errors";
 import { outputReplay, setColorEnabled } from "../src/lib/output";
 import { artistsInTopSongs } from "../src/lib/replay";
 import type { Replay, Track } from "../src/lib/types";
+import { capture } from "./capture";
 
 // Shaped like Apple's /me/music-summaries/search response; names and numbers are made up.
 function summary(year: number, attributes: Record<string, unknown> = {}) {
@@ -41,6 +42,7 @@ function replayEngine(requests: string[] = []) {
       if (path === "/catalog/us/playlists/pl.rp-2025/tracks") {
         return { data: [song("1", "Nights", "Frank Ocean"), song("2", "Latch", "Disclosure")] } as T;
       }
+      if (path === "/catalog/us/playlists/pl.rp-2026/tracks") return { data: [] } as T;
       throw new Error(`unexpected request: ${path}`);
     },
   });
@@ -68,15 +70,7 @@ describe("API Replay", () => {
   });
 
   test("defaults to the latest year", async () => {
-    const engine = new ApiEngine({
-      request: async <T>(path: string): Promise<T> => {
-        if (path === "/me/music-summaries/search") return summaries as T;
-        if (path === "/catalog/us/playlists/pl.rp-2026/tracks") return { data: [] } as T;
-        throw new Error(`unexpected request: ${path}`);
-      },
-    });
-
-    expect((await engine.getReplay()).year.year).toBe(2026);
+    expect((await replayEngine().getReplay()).year.year).toBe(2026);
   });
 
   test("names the years Apple has when the requested one is missing", async () => {
@@ -120,17 +114,11 @@ describe("Replay report", () => {
       years: [{ year: 2026 }, { year: 2025, listenMinutes: 60000 }, { year: 2024, listenMinutes: 6000 }],
       topSongs: [track("Nights", "Frank Ocean"), track("Latch", "Disclosure"), track("Ivy", "Frank Ocean")],
     };
-    const lines: string[] = [];
-    const originalLog = console.log;
-    console.log = (value?: unknown) => {
-      lines.push(String(value));
-    };
     setColorEnabled(false);
-
+    let lines: string[];
     try {
-      outputReplay(replay, "human", 2);
+      lines = capture("log", () => outputReplay(replay, "human", 2));
     } finally {
-      console.log = originalLog;
       setColorEnabled(true);
     }
 

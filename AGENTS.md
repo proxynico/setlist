@@ -140,7 +140,7 @@ bun run build
 Current suite:
 
 ```bash
-bun test  # 89 tests across 16 files
+bun test  # 87 tests across 16 files
 ```
 
 ## macOS Notes
