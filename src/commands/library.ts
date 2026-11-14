@@ -34,7 +34,7 @@ const AUDIT_COMMANDS: AuditCommand[] = [
     command: "audit",
     description: "Read-only library audit: counts, genres, playlists, duplicates, orphans, and theme suggestions",
     defaultSuggestions: "20",
-    output: (audit, mode) => outputLibraryAudit(audit, mode),
+    output: outputLibraryAudit,
   },
   {
     command: "duplicates",
@@ -59,9 +59,6 @@ const AUDIT_COMMANDS: AuditCommand[] = [
 
 export function registerLibraryCommands(program: Command, getEngine: () => MusicEngine) {
   const mode = () => getOutputMode(program.opts());
-
-  const listTracks = async (id: string) => outputTracks(await getEngine().getPlaylistTracks(id), mode());
-  const listPlaylists = async () => outputPlaylists(await getEngine().getPlaylists(), mode());
 
   const library = program.command("library").alias("lib").description("Browse your music library");
 
@@ -92,8 +89,14 @@ export function registerLibraryCommands(program: Command, getEngine: () => Music
       outputAlbums(albums, mode());
     });
 
-  library.command("playlists").description("List your playlists").action(listPlaylists);
-  library.command("playlist <id>").description("Show tracks in a playlist").action(listTracks);
+  library
+    .command("playlists")
+    .description("List your playlists")
+    .action(async () => outputPlaylists(await getEngine().getPlaylists(), mode()));
+  library
+    .command("playlist <id>")
+    .description("Show tracks in a playlist")
+    .action(async (id: string) => outputTracks(await getEngine().getPlaylistTracks(id), mode()));
 
   // ── Library gardening (read-only) ──
 
@@ -105,12 +108,9 @@ export function registerLibraryCommands(program: Command, getEngine: () => Music
       command.option("--suggestions <n>", "Theme suggestions to compute per playlist", spec.defaultSuggestions);
     }
     command.action(async (opts: AuditOptions) => {
-      const snapshot = await collectLibrarySnapshot(getEngine(), {
-        maxItems: parseInteger("max items", opts.maxItems, { min: 1 }),
-      });
-      const audit = analyzeLibrarySnapshot(snapshot, {
-        suggestionsPerTheme: parseInteger("suggestions", opts.suggestions ?? "20", { min: 1 }),
-      });
+      const maxItems = parseInteger("max items", opts.maxItems, { min: 1 });
+      const snapshot = await collectLibrarySnapshot(getEngine(), maxItems);
+      const audit = analyzeLibrarySnapshot(snapshot, parseInteger("suggestions", opts.suggestions ?? "20", { min: 1 }));
       const limit = opts.limit === undefined ? Number.POSITIVE_INFINITY : parseInteger("limit", opts.limit, { min: 1 });
       spec.output(audit, mode(), limit);
     });
@@ -151,10 +151,4 @@ export function registerLibraryCommands(program: Command, getEngine: () => Music
         `Removed ${trackIds.length} track${trackIds.length === 1 ? "" : "s"} from playlist`,
       );
     });
-
-  playlist
-    .command("tracks <id>")
-    .description("List tracks in a playlist (alias for library playlist)")
-    .action(listTracks);
-  playlist.command("list").alias("ls").description("List all playlists").action(listPlaylists);
 }

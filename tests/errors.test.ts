@@ -4,21 +4,15 @@ import {
   ValidationError,
   ExternalServiceError,
   UnsupportedOperationError,
-  isMusicError,
+  MusicError,
 } from "../src/lib/errors";
 
 describe("error hierarchy", () => {
   test("all error types are MusicError instances", () => {
-    expect(isMusicError(new ValidationError("bad input"))).toBe(true);
-    expect(isMusicError(new AuthError("no token"))).toBe(true);
-    expect(isMusicError(new ExternalServiceError("JXA failed"))).toBe(true);
-    expect(isMusicError(new UnsupportedOperationError("not supported"))).toBe(true);
-  });
-
-  test("plain errors are not MusicError", () => {
-    expect(isMusicError(new Error("plain"))).toBe(false);
-    expect(isMusicError("string")).toBe(false);
-    expect(isMusicError(null)).toBe(false);
+    expect(new ValidationError("bad input")).toBeInstanceOf(MusicError);
+    expect(new AuthError("no token")).toBeInstanceOf(MusicError);
+    expect(new ExternalServiceError("JXA failed")).toBeInstanceOf(MusicError);
+    expect(new UnsupportedOperationError("not supported")).toBeInstanceOf(MusicError);
   });
 
   test("error codes are correct", () => {

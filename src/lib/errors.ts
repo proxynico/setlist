@@ -1,4 +1,4 @@
-export interface MusicErrorOptions {
+interface MusicErrorOptions {
   code: string;
   hint?: string;
   cause?: unknown;
@@ -7,14 +7,12 @@ export interface MusicErrorOptions {
 export class MusicError extends Error {
   code: string;
   hint?: string;
-  cause?: unknown;
 
   constructor(message: string, options: MusicErrorOptions) {
-    super(message);
+    super(message, { cause: options.cause });
     this.name = "MusicError";
     this.code = options.code;
     this.hint = options.hint;
-    this.cause = options.cause;
   }
 }
 
@@ -44,8 +42,4 @@ export class ExternalServiceError extends MusicError {
     super(message, { code: "external_service_error", hint, cause });
     this.name = "ExternalServiceError";
   }
-}
-
-export function isMusicError(error: unknown): error is MusicError {
-  return error instanceof MusicError;
 }

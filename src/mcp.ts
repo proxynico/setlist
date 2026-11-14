@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { McpServer, type RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pkg from "../package.json";
-import { isMusicError } from "./lib/errors";
+import { MusicError } from "./lib/errors";
 import {
   analyzeLibrarySnapshot,
   auditSummary,
@@ -12,7 +12,7 @@ import {
   themesReport,
 } from "./lib/library-audit";
 import { replayReport } from "./lib/replay";
-import type { EngineName, MusicEngine, SearchType } from "./lib/types";
+import { type EngineName, type MusicEngine, SEARCH_TYPES } from "./lib/types";
 
 /**
  * MCP server over the same engines as the CLI, so AI assistants can drive
@@ -35,7 +35,7 @@ type ToolResult = { content: Content[]; isError?: true };
 const json = (value: unknown): Content => ({ type: "text", text: JSON.stringify(value) });
 
 function errorText(error: unknown): string {
-  if (isMusicError(error)) return error.hint ? `${error.message}\n${error.hint}` : error.message;
+  if (error instanceof MusicError) return error.hint ? `${error.message}\n${error.hint}` : error.message;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -50,14 +50,6 @@ function tool<A>(body: (args: A) => Promise<Content[]>) {
   };
 }
 
-const SEARCH_TYPES: Record<string, SearchType[]> = {
-  track: ["track"],
-  album: ["album"],
-  artist: ["artist"],
-  playlist: ["playlist"],
-  all: ["track", "album", "artist", "playlist"],
-};
-
 const limitSchema = (fallback: number) => z.number().int().min(1).max(500).default(fallback).describe("Max results");
 const trackIds = z.array(z.string().min(1)).min(1).describe("native:persistent track IDs");
 const engineSchema = z
@@ -65,16 +57,12 @@ const engineSchema = z
   .optional()
   .describe("Read from Music.app (native) or the Apple Music API (api). Playlist edits need native IDs.");
 
-export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): {
-  server: McpServer;
-  tools: Record<string, RegisteredTool>;
-} {
+export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): McpServer {
   const server = new McpServer({ name: pkg.name, version: pkg.version }, { instructions: INSTRUCTIONS });
-  const tools: Record<string, RegisteredTool> = {};
 
   // ── Playback ──
 
-  tools.status = server.registerTool(
+  server.registerTool(
     "status",
     {
       description: "What is playing: track, position, volume, shuffle and repeat. Can include the album art.",
@@ -91,7 +79,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.play = server.registerTool(
+  server.registerTool(
     "play",
     {
       description: "Play the first library track matching a query, or resume playback when no query is given.",
@@ -104,7 +92,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.playback = server.registerTool(
+  server.registerTool(
     "playback",
     {
       description: "Pause, resume, or skip to the next or previous track.",
@@ -117,7 +105,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.seek = server.registerTool(
+  server.registerTool(
     "seek",
     {
       description: "Jump to a position in the current track.",
@@ -130,7 +118,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.set_volume = server.registerTool(
+  server.registerTool(
     "set_volume",
     {
       description: "Set Music.app's volume.",
@@ -143,7 +131,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.set_shuffle = server.registerTool(
+  server.registerTool(
     "set_shuffle",
     {
       description: "Turn shuffle on or off.",
@@ -156,7 +144,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.set_repeat = server.registerTool(
+  server.registerTool(
     "set_repeat",
     {
       description: "Set repeat to off, one track, or all.",
@@ -169,7 +157,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.devices = server.registerTool(
+  server.registerTool(
     "devices",
     {
       description: "List the speakers and AirPlay devices Music.app can play to.",
@@ -181,25 +169,25 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
 
   // ── Search and library ──
 
-  tools.search = server.registerTool(
+  server.registerTool(
     "search",
     {
       description:
         "Search the Apple Music catalog when signed in, otherwise the local library. With type all, the limit applies per type.",
       inputSchema: {
         query: z.string().min(1),
-        type: z.enum(["track", "album", "artist", "playlist", "all"]).default("all"),
+        type: z.enum([...SEARCH_TYPES, "all"]).default("all"),
         limit: limitSchema(10),
         engine: engineSchema,
       },
       annotations: { ...READ_ONLY, openWorldHint: true },
     },
     tool(async ({ query, type, limit, engine }) => [
-      json(await getEngine(engine).search(query, SEARCH_TYPES[type], limit)),
+      json(await getEngine(engine).search(query, type === "all" ? [...SEARCH_TYPES] : [type], limit)),
     ]),
   );
 
-  tools.library = server.registerTool(
+  server.registerTool(
     "library",
     {
       description: "List the user's library tracks, albums, or playlists.",
@@ -219,7 +207,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.playlist = server.registerTool(
+  server.registerTool(
     "playlist",
     {
       description: "A playlist's tracks, length, top artists and genres.",
@@ -229,7 +217,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     tool(async ({ id, engine }) => [json(await getEngine(engine).getPlaylistInfo(id))]),
   );
 
-  tools.library_report = server.registerTool(
+  server.registerTool(
     "library_report",
     {
       description: [
@@ -249,8 +237,8 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
       annotations: READ_ONLY,
     },
     tool(async ({ report, limit, max_items, engine }) => {
-      const snapshot = await collectLibrarySnapshot(getEngine(engine), { maxItems: max_items });
-      const audit = analyzeLibrarySnapshot(snapshot, { suggestionsPerTheme: limit });
+      const snapshot = await collectLibrarySnapshot(getEngine(engine), max_items);
+      const audit = analyzeLibrarySnapshot(snapshot, limit);
       if (report === "duplicates") return [json(duplicatesReport(audit, limit))];
       if (report === "orphans") return [json(orphansReport(audit, limit))];
       if (report === "themes") return [json(themesReport(audit, limit))];
@@ -258,7 +246,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.replay = server.registerTool(
+  server.registerTool(
     "replay",
     {
       description:
@@ -274,7 +262,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
 
   // ── Playlist edits ──
 
-  tools.playlist_add = server.registerTool(
+  server.registerTool(
     "playlist_add",
     {
       description: "Add tracks to a playlist in Music.app.",
@@ -287,7 +275,7 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  tools.playlist_remove = server.registerTool(
+  server.registerTool(
     "playlist_remove",
     {
       description: "Remove tracks from a playlist in Music.app. The tracks stay in the library.",
@@ -302,5 +290,5 @@ export function createMcpServer(getEngine: (name?: EngineName) => MusicEngine): 
     }),
   );
 
-  return { server, tools };
+  return server;
 }

@@ -14,7 +14,7 @@ import type {
 import { loadConfig } from "../lib/config";
 import { buildIdentity, resolveRawId } from "../lib/entities";
 import { mapConcurrent } from "../lib/concurrency";
-import { AuthError, ExternalServiceError, isMusicError, MusicError, UnsupportedOperationError } from "../lib/errors";
+import { AuthError, ExternalServiceError, MusicError, UnsupportedOperationError } from "../lib/errors";
 import { summarizePlaylistTracks } from "../lib/library-audit";
 import { cacheDeveloperToken, getCachedDeveloperToken, getMediaUserToken } from "../lib/secrets";
 
@@ -58,16 +58,16 @@ function decodeJwtClaims(token: string): JwtClaims | undefined {
   }
 }
 
-function isUnexpired(claims: JwtClaims, now: number): boolean {
-  return claims.exp === undefined || claims.exp * 1000 > now + TOKEN_EXPIRY_MARGIN_MS;
+function isUnexpired(claims: JwtClaims): boolean {
+  return claims.exp === undefined || claims.exp * 1000 > Date.now() + TOKEN_EXPIRY_MARGIN_MS;
 }
 
 /** Find an unexpired developer token in web-player HTML or JavaScript, preferring the web player's own. */
-export function findDeveloperToken(text: string, now = Date.now()): string | undefined {
+export function findDeveloperToken(text: string): string | undefined {
   let fallback: string | undefined;
   for (const [token] of text.matchAll(JWT_PATTERN)) {
     const claims = decodeJwtClaims(token);
-    if (!claims || !isUnexpired(claims, now)) continue;
+    if (!claims || !isUnexpired(claims)) continue;
     if (claims.iss === WEB_PLAYER_TOKEN_ISSUER) return token;
     fallback ??= token;
   }
@@ -120,7 +120,7 @@ async function scrapeAndCacheDeveloperToken(): Promise<DeveloperToken> {
 async function loadDeveloperToken(): Promise<DeveloperToken> {
   const cached = await getCachedDeveloperToken();
   const claims = cached ? decodeJwtClaims(cached) : undefined;
-  if (cached && claims && isUnexpired(claims, Date.now())) return { value: cached, fromCache: true };
+  if (cached && claims && isUnexpired(claims)) return { value: cached, fromCache: true };
   return scrapeAndCacheDeveloperToken();
 }
 
@@ -224,17 +224,9 @@ interface AMResponse {
   meta?: { total?: number };
 }
 
-type ApiRequest = <T>(path: string, params?: Record<string, string>) => Promise<T>;
-type ConfigLoader = () => Promise<CliConfig>;
-
 interface ApiEngineDeps {
-  request?: ApiRequest;
-  configLoader?: ConfigLoader;
-}
-
-interface ApiPage {
-  path: string;
-  params: Record<string, string>;
+  request?: <T>(path: string, params?: Record<string, string>) => Promise<T>;
+  configLoader?: () => Promise<CliConfig>;
 }
 
 // ── Safe field extraction from untyped API responses ──
@@ -243,8 +235,8 @@ function str(val: unknown, fallback = ""): string {
   return typeof val === "string" ? val : fallback;
 }
 
-function num(val: unknown, fallback = 0): number {
-  return typeof val === "number" && Number.isFinite(val) ? val : fallback;
+function optionalNum(val: unknown): number | undefined {
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
 }
 
 function firstString(val: unknown): string | undefined {
@@ -268,13 +260,13 @@ function extractIds(r: AMResource): { catalogId?: string; libraryId?: string } {
   return { catalogId: catalogId || undefined, libraryId: r.type.startsWith("library-") ? r.id : undefined };
 }
 
-function resolveApiLibraryId(id: string, label: "Playlist"): string {
+function resolveApiPlaylistId(id: string): string {
   return resolveRawId(id, {
     source: "api",
     kind: "library",
-    label,
+    label: "Playlist",
     description: "an Apple Music library ID",
-    hint: `Use \`setlist --engine api ... --json\` and pass the ${label.toLowerCase()}'s \`libraryId\` field.`,
+    hint: "Use `setlist --engine api ... --json` and pass the playlist's `libraryId` field.",
   });
 }
 
@@ -296,8 +288,8 @@ function parseApiTrack(r: AMResource): Track {
     name: str(a.name, "Unknown"),
     artist: str(a.artistName, "Unknown"),
     album: str(a.albumName),
-    duration: Math.round(num(a.durationInMillis) / 1000),
-    trackNumber: num(a.trackNumber) || undefined,
+    duration: Math.round((optionalNum(a.durationInMillis) ?? 0) / 1000),
+    trackNumber: optionalNum(a.trackNumber) || undefined,
     genre: firstString(a.genreNames),
     year: parseYear(a.releaseDate),
     artworkUrl: formatArtwork(a.artwork),
@@ -310,7 +302,7 @@ function parseApiAlbum(r: AMResource): Album {
     ...buildIdentity({ source: "api", ...extractIds(r) }),
     name: str(a.name, "Unknown"),
     artist: str(a.artistName, "Unknown"),
-    trackCount: typeof a.trackCount === "number" ? a.trackCount : undefined,
+    trackCount: optionalNum(a.trackCount),
     year: parseYear(a.releaseDate),
     genre: firstString(a.genreNames),
     artworkUrl: formatArtwork(a.artwork),
@@ -335,10 +327,6 @@ function parseApiPlaylist(r: AMResource): Playlist {
     description: str(recordOrEmpty(a.description).short) || undefined,
     artworkUrl: formatArtwork(a.artwork),
   };
-}
-
-function optionalNum(val: unknown): number | undefined {
-  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
 }
 
 interface ReplaySummary {
@@ -369,7 +357,7 @@ function parseReplaySummary(r: AMResource): ReplaySummary[] {
   ];
 }
 
-function parseNextPage(next: string, limit: string): ApiPage {
+function parseNextPage(next: string, limit: string): { path: string; params: Record<string, string> } {
   const url = new URL(next, AMP_API_BASE);
   const params = Object.fromEntries(url.searchParams.entries());
   return {
@@ -380,7 +368,7 @@ function parseNextPage(next: string, limit: string): ApiPage {
 }
 
 function isNotFound(err: unknown): boolean {
-  return isMusicError(err) && err.code === "not_found";
+  return err instanceof MusicError && err.code === "not_found";
 }
 
 function tooManyPages(): ExternalServiceError {
@@ -513,7 +501,7 @@ export class ApiEngine implements MusicEngine {
   }
 
   async getPlaylistTracks(playlistId: string): Promise<Track[]> {
-    const path = `/me/library/playlists/${encodeURIComponent(resolveApiLibraryId(playlistId, "Playlist"))}`;
+    const path = `/me/library/playlists/${encodeURIComponent(resolveApiPlaylistId(playlistId))}`;
     try {
       return (await this.requestPages(`${path}/tracks`, {})).map(parseApiTrack);
     } catch (err) {
@@ -526,7 +514,7 @@ export class ApiEngine implements MusicEngine {
   }
 
   async getPlaylistInfo(playlistId: string): Promise<PlaylistDetails> {
-    const id = resolveApiLibraryId(playlistId, "Playlist");
+    const id = resolveApiPlaylistId(playlistId);
     const [data, tracks] = await Promise.all([
       this.request<AMResponse>(`/me/library/playlists/${encodeURIComponent(id)}`),
       this.getPlaylistTracks(id),

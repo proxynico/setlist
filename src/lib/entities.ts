@@ -1,15 +1,7 @@
 import type { EntityIdentity, EntitySource } from "./types";
 import { UnsupportedOperationError, ValidationError } from "./errors";
 
-interface IdentityInput {
-  source: EntitySource;
-  persistentId?: string;
-  libraryId?: string;
-  catalogId?: string;
-  derivedId?: string;
-}
-
-export function buildIdentity(input: IdentityInput): EntityIdentity {
+export function buildIdentity(input: Omit<EntityIdentity, "id"> & { derivedId?: string }): EntityIdentity {
   const id =
     (input.persistentId && createEntityRef(input.source, "persistent", input.persistentId)) ||
     (input.libraryId && createEntityRef(input.source, "library", input.libraryId)) ||
@@ -28,9 +20,9 @@ export function buildIdentity(input: IdentityInput): EntityIdentity {
   };
 }
 
-export type EntityRefKind = "persistent" | "library" | "catalog" | "derived";
+type EntityRefKind = "persistent" | "library" | "catalog" | "derived";
 
-export interface EntityRef {
+interface EntityRef {
   source: EntitySource;
   kind: EntityRefKind;
   value: string;

@@ -90,7 +90,7 @@ describe("library audit analysis", () => {
         playlists: [lateNight],
         playlistTracks: [{ playlist: lateNight, tracks: [tracks[0]] }],
       },
-      { suggestionsPerTheme: 5 },
+      5,
     );
 
     expect(audit.themeSuggestions).toEqual([

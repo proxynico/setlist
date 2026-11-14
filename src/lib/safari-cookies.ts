@@ -2,7 +2,6 @@ export interface SafariCookie {
   name: string;
   domain: string;
   value: string;
-  path: string;
 }
 
 /** Read a 32-bit integer from a cookie buffer with explicit endianness. */
@@ -16,7 +15,7 @@ function readU32(data: Uint8Array, offset: number, littleEndian: boolean): numbe
 
 /** Read a NUL-terminated UTF-8 string from a cookie record. */
 function readCString(data: Uint8Array, offset: number): string {
-  if (offset < 0 || offset >= data.length) {
+  if (offset >= data.length) {
     throw new Error("invalid string offset in Safari cookie file");
   }
   let end = offset;
@@ -34,20 +33,10 @@ export function parseSafariBinaryCookies(data: Uint8Array): SafariCookie[] {
   }
 
   const pageCount = readU32(data, 4, false);
-  const headerSize = 8 + pageCount * 4;
-  if (headerSize > data.length) {
-    throw new Error("truncated Safari cookie file header");
-  }
-
-  const pageSizes: number[] = [];
-  for (let i = 0; i < pageCount; i += 1) {
-    pageSizes.push(readU32(data, 8 + i * 4, false));
-  }
-
   const cookies: SafariCookie[] = [];
-  let pageOffset = headerSize;
-  for (const pageSize of pageSizes) {
-    const pageEnd = pageOffset + pageSize;
+  let pageOffset = 8 + pageCount * 4;
+  for (let i = 0; i < pageCount; i += 1) {
+    const pageEnd = pageOffset + readU32(data, 8 + i * 4, false);
     if (pageEnd > data.length) {
       throw new Error("truncated Safari cookie page");
     }
@@ -83,13 +72,11 @@ function parseCookie(page: Uint8Array, offset: number): SafariCookie {
 
   const domainOffset = readU32(cookie, 16, true);
   const nameOffset = readU32(cookie, 20, true);
-  const pathOffset = readU32(cookie, 24, true);
   const valueOffset = readU32(cookie, 28, true);
 
   return {
     domain: readCString(cookie, domainOffset),
     name: readCString(cookie, nameOffset),
-    path: readCString(cookie, pathOffset),
     value: readCString(cookie, valueOffset),
   };
 }
