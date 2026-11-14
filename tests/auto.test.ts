@@ -4,8 +4,8 @@ import { createStubEngine } from "./stub-engine";
 
 describe("auto engine routing", () => {
   test("uses native search when no API token is configured", async () => {
-    const nativeSearch = mock(async () => ({ tracks: [], albums: [], artists: [], playlists: [] }));
-    const apiSearch = mock(async () => ({ tracks: [], albums: [], artists: [], playlists: [] }));
+    const nativeSearch = mock(createStubEngine().search);
+    const apiSearch = mock(createStubEngine().search);
     const engine = new AutoEngine(
       createStubEngine({ search: nativeSearch }),
       createStubEngine({ search: apiSearch }),
@@ -19,8 +19,8 @@ describe("auto engine routing", () => {
   });
 
   test("uses API search when a token is configured", async () => {
-    const nativeSearch = mock(async () => ({ tracks: [], albums: [], artists: [], playlists: [] }));
-    const apiSearch = mock(async () => ({ tracks: [], albums: [], artists: [], playlists: [] }));
+    const nativeSearch = mock(createStubEngine().search);
+    const apiSearch = mock(createStubEngine().search);
     const engine = new AutoEngine(
       createStubEngine({ search: nativeSearch }),
       createStubEngine({ search: apiSearch }),
@@ -34,7 +34,7 @@ describe("auto engine routing", () => {
   });
 
   test("does not silently fall back when API search fails", async () => {
-    const nativeSearch = mock(async () => ({ tracks: [], albums: [], artists: [], playlists: [] }));
+    const nativeSearch = mock(createStubEngine().search);
     const apiSearch = mock(async () => {
       throw new Error("expired token");
     });

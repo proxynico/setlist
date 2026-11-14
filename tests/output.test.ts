@@ -8,20 +8,7 @@ import {
   setVerboseEnabled,
 } from "../src/lib/output";
 import { ExternalServiceError } from "../src/lib/errors";
-
-function captureErrors(run: () => void): string[] {
-  const lines: string[] = [];
-  const original = console.error;
-  console.error = (value?: unknown) => {
-    lines.push(String(value));
-  };
-  try {
-    run();
-  } finally {
-    console.error = original;
-  }
-  return lines;
-}
+import { capture } from "./capture";
 
 describe("getOutputMode", () => {
   test("defaults to human output", () => {
@@ -43,13 +30,7 @@ describe("getOutputMode", () => {
 
 describe("plain output", () => {
   test("escapes tabs and newlines in track fields", () => {
-    const lines: string[] = [];
-    const originalLog = console.log;
-    console.log = (value?: unknown) => {
-      lines.push(String(value));
-    };
-
-    try {
+    const lines = capture("log", () =>
       outputTracks(
         [
           {
@@ -63,10 +44,8 @@ describe("plain output", () => {
           },
         ],
         "plain",
-      );
-    } finally {
-      console.log = originalLog;
-    }
+      ),
+    );
 
     expect(lines).toEqual([
       "track\tnative:persistent:ABC123\tone\\ttwo\tline\\nbreak\tcarriage\\rreturn\t1:01\tnative",
@@ -76,36 +55,32 @@ describe("plain output", () => {
 
 describe("status output", () => {
   test("shows the track, a progress bar, and playback modes", () => {
-    const lines: string[] = [];
-    const originalLog = console.log;
-    console.log = (value?: unknown) => {
-      lines.push(String(value));
-    };
     setColorEnabled(false);
-
+    let lines: string[];
     try {
-      outputStatus(
-        {
-          state: "playing",
-          track: {
-            id: "native:persistent:ABC123",
-            source: "native",
-            persistentId: "ABC123",
-            name: "Airbag",
-            artist: "Radiohead",
-            album: "OK Computer",
-            year: 1997,
-            duration: 240,
+      lines = capture("log", () =>
+        outputStatus(
+          {
+            state: "playing",
+            track: {
+              id: "native:persistent:ABC123",
+              source: "native",
+              persistentId: "ABC123",
+              name: "Airbag",
+              artist: "Radiohead",
+              album: "OK Computer",
+              year: 1997,
+              duration: 240,
+            },
+            position: 60,
+            volume: 70,
+            shuffleEnabled: true,
+            repeatMode: "all",
           },
-          position: 60,
-          volume: 70,
-          shuffleEnabled: true,
-          repeatMode: "all",
-        },
-        "human",
+          "human",
+        ),
       );
     } finally {
-      console.log = originalLog;
       setColorEnabled(true);
     }
 
@@ -126,7 +101,7 @@ describe("error output", () => {
     setVerboseEnabled(false);
     try {
       const err = new ExternalServiceError("API unreachable", "Check your network.", new Error("ECONNREFUSED"));
-      const lines = captureErrors(() => outputErrorDetails(err));
+      const lines = capture("error", () => outputErrorDetails(err));
       expect(lines).toEqual(["error: API unreachable", "Check your network."]);
     } finally {
       setColorEnabled(true);
@@ -138,7 +113,7 @@ describe("error output", () => {
     setVerboseEnabled(true);
     try {
       const err = new ExternalServiceError("API unreachable", "Check your network.", new Error("ECONNREFUSED"));
-      const lines = captureErrors(() => outputErrorDetails(err));
+      const lines = capture("error", () => outputErrorDetails(err));
       expect(lines[0]).toBe("error: API unreachable");
       expect(lines[1]).toBe("Check your network.");
       expect(lines.some((line) => line.includes("ECONNREFUSED"))).toBe(true);
